@@ -946,11 +946,12 @@ function detailNodes(range: string, d: BarDetail, colour: Map<string, string>): 
 // A stacked bar chart shared by the cost and quota views. Each bar is split by
 // key (provider or account); hovering, tapping or arrow-keying a bar shows the
 // detail that describe() returns for it.
-// line: an optional series drawn over the bars in the same unit (null = no point);
-// lineComplete=false marks points whose window reaches past the retained history.
+// line: an optional series drawn over the bars on its own scale, labelled on the
+// right (null = no point); lineComplete=false marks points whose window reaches
+// past the retained history.
 type StackedBar = {from: string; to: string; parts: Record<string, number>; total: number | null; line?: number | null; lineComplete?: boolean};
 function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: string; order: string[]; colour: Map<string, string>;
-    names: Map<string, string>; valueLabel: (v: number) => string; describe: (i: number) => BarDetail; lineLabel?: string}): HTMLElement {
+    names: Map<string, string>; valueLabel: (v: number) => string; describe: (i: number) => BarDetail; lineLabel?: string; lineValueLabel?: (v: number) => string}): HTMLElement {
   const {bars, bucketHours, order, colour, names} = opts;
   const box = node('figure', 'daily-chart');
   const cap = node('figcaption');
@@ -970,7 +971,8 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
   }
   cap.append(legend);
   box.append(cap);
-  const max = Math.max(1e-9, ...bars.map(b => Math.max(b.total ?? 0, hasLine ? b.line ?? 0 : 0)));
+  const max = Math.max(1e-9, ...bars.map(b => b.total ?? 0));
+  const lineMax = Math.max(1e-9, ...bars.map(b => b.line ?? 0));
   const plot = node('div', 'chart-plot');
   const W = 600, H = 160, pad = bars.length > 30 ? 1 : 2, bw = W / bars.length;
   const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', class: 'bars'});
@@ -1009,7 +1011,7 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
   if (hasLine) {
     // Two paths over the same points: solid where the moving window is fully
     // covered by retained history, dashed where it is not yet.
-    const pt = (i: number) => `${(i + 0.5) * bw},${H - (bars[i]?.line ?? 0) / max * (H - 4)}`;
+    const pt = (i: number) => `${(i + 0.5) * bw},${H - (bars[i]?.line ?? 0) / lineMax * (H - 4)}`;
     const segs = {full: [] as string[], partial: [] as string[]};
     for (let i = 0; i < bars.length; i++) {
       const b = bars[i], n = bars[i + 1];
@@ -1034,10 +1036,18 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
     }
   });
   plot.append(chart);
+  if (hasLine) {
+    // Right-hand scale for the line: its top and zero, so the line can be read
+    // in dollars without hovering.
+    const right = node('div', 'line-axis');
+    right.append(node('span', '', (opts.lineValueLabel ?? opts.valueLabel)(lineMax)), node('span', '', '$0'));
+    plot.append(right);
+  }
   box.append(plot);
   const axis = node('div', 'chart-axis');
   const firstB = bars[0], lastB = bars[bars.length - 1];
-  axis.append(node('span', '', firstB ? axisLabel(firstB.from, bucketHours) : ''), node('span', '', `최대 ${opts.valueLabel(max)}`), node('span', '', lastB ? axisLabel(lastB.from, bucketHours) : ''));
+  const scale = node('span', '', `막대 최대 ${opts.valueLabel(max)}`);
+  axis.append(node('span', '', firstB ? axisLabel(firstB.from, bucketHours) : ''), scale, node('span', '', lastB ? axisLabel(lastB.from, bucketHours) : ''));
   box.append(axis, tip);
   // The detail strip is reserved at the height of the tallest bar detail, so
   // hovering never moves what sits below the chart. Measured once the chart is
@@ -1073,15 +1083,12 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
 function bucketChart(series: CostSeries, order: string[], colour: Map<string, string>, names: Map<string, string>, spanLabel: string): HTMLElement {
   const {buckets, bucketHours, spanHours} = series;
   const unit = bucketHours >= 24 ? '일별' : `${bucketHours}시간 단위`;
-  // The line is the trailing span's total rescaled to one bar: the average
-  // amount per bar over the last 24 hours / 7 days / 30 days at each bar's end.
-  // Bars clipped to the span edge are shorter than bucketHours, but the average
-  // is still stated per full bar so it reads against a full bar's height.
-  const perBar = (b: CostBucket) => b.trailingUsd === null || spanHours <= 0 ? null : b.trailingUsd * bucketHours / spanHours;
+  // The line is the trailing span's own total at each bar's end (24 hours,
+  // 7 days or 30 days), drawn on its own scale.
   const spanWord = spanHours >= 24 * 28 ? '30일' : spanHours >= 24 * 7 ? '7일' : '24시간';
   return stackedChart({
-    bars: buckets.map(b => ({from: b.from, to: b.to, parts: b.byProvider, total: b.apiUsd, line: perBar(b), lineComplete: b.trailingComplete})),
-    lineLabel: `${spanWord} 이동평균`,
+    bars: buckets.map(b => ({from: b.from, to: b.to, parts: b.byProvider, total: b.apiUsd, line: b.trailingUsd, lineComplete: b.trailingComplete})),
+    lineLabel: `직전 ${spanWord} 합계 (오른쪽 축)`, lineValueLabel: v => usd(v),
     bucketHours, title: `최근 ${spanLabel} ${unit} 환산액`, order, colour, names, valueLabel: v => usd(v),
     describe: i => {
       const b = buckets[i];
@@ -1094,7 +1101,7 @@ function bucketChart(series: CostSeries, order: string[], colour: Map<string, st
         rows: Object.entries(b.byProvider).sort((x, y) => y[1] - x[1]).slice(0, 5)
           .map(([id, amount]) => ({id, name: names.get(id) ?? id, values: [money(amount), share(amount)]})),
         notes: [
-          ...(b.trailingUsd !== null ? [`${spanWord} 이동평균 ${money(perBar(b) ?? 0)}/${bucketHours >= 24 ? '일' : `${bucketHours}시간`} · 직전 ${spanWord} 합계 ${money(b.trailingUsd)}${b.trailingComplete ? '' : ' (기록이 기간보다 짧음)'}`] : []),
+          ...(b.trailingUsd !== null ? [`직전 ${spanWord} 합계 ${money(b.trailingUsd)}${b.trailingComplete ? '' : ' (기록이 기간보다 짧음)'}`] : []),
           ...(models.length ? ['상위 모델 · ' + models.map(([m, a]) => `${m.split('/').slice(1).join('/') || m} ${money(a)}`).join(' · ')] : []),
           ...(b.unpricedRequests ? [`단가 미확인 ${count.format(b.unpricedRequests)}회 제외`] : []),
         ],
