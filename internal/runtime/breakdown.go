@@ -269,6 +269,13 @@ type costBucket struct {
 	Unpriced   int                `json:"unpricedRequests"`
 	ByProvider map[string]float64 `json:"byProvider"`
 	ByModel    map[string]float64 `json:"byModel"`
+	// TrailingUsd is the priced amount in the full span ending where this bar
+	// ends (24 hours for the day view, 7 days for the week view, 30 days for
+	// the month view): the moving total the chart's line is drawn from.
+	// TrailingComplete is false when that span reaches back before the
+	// oldest retained usage row, so the total covers less than the span.
+	TrailingUsd      float64 `json:"trailingUsd"`
+	TrailingComplete bool    `json:"trailingComplete"`
 }
 
 // bucketSeries splits the span ending at now into bars (see seriesEdges) and
@@ -303,7 +310,27 @@ func bucketSeries(rows []store.Usage, prices []calc.AppliedPrice, now int64, loc
 		}
 		b.ByModel[rows[i].Provider+"/"+model] += *prices[i].USD
 	}
-	return map[string]any{"bucketHours": spec.bucket.Hours(), "buckets": buckets}
+	// Moving total: a prefix sum over priced rows answers each bar's
+	// (end - span, end] window in two binary searches.
+	cum := make([]float64, len(rows)+1)
+	for i := range rows {
+		cum[i+1] = cum[i]
+		if prices[i].USD != nil {
+			cum[i+1] += *prices[i].USD
+		}
+	}
+	upTo := func(at int64) int { return sort.Search(len(rows), func(i int) bool { return rows[i].At > at }) }
+	oldest := int64(0)
+	if len(rows) > 0 {
+		oldest = rows[0].At
+	}
+	span := spec.span.Milliseconds()
+	for i := range buckets {
+		end := edges[i+1]
+		buckets[i].TrailingUsd = cum[upTo(end)] - cum[upTo(end-span)]
+		buckets[i].TrailingComplete = len(rows) > 0 && oldest <= end-span
+	}
+	return map[string]any{"bucketHours": spec.bucket.Hours(), "spanHours": spec.span.Hours(), "buckets": buckets}
 }
 
 func dailySeries(rows []store.Usage, prices []calc.AppliedPrice, now int64, loc *time.Location) []costDay {

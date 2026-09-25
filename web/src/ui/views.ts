@@ -801,6 +801,28 @@ const COST_PERIODS = [{key:'day', label:'24시간'}, {key:'week', label:'7일'},
 type CostKey = typeof COST_PERIODS[number]['key'];
 let costSelection: CostKey = 'week';
 const PALETTE = ['#4f7cff', '#a36bff', '#18a7a0', '#e0607e', '#e0932f', '#6c9a2e', '#7a8499', '#2fb7d8', '#c4a13a', '#8a5a44'];
+// One colour per provider, the same in every chart. Official accents where the
+// brand publishes one (Claude coral, ChatGPT green, Google blue, Xiaomi orange,
+// Command Code violet); monochrome brands get a distinct colour chosen here so
+// that no two providers share a hue. Unknown providers fall back to PALETTE.
+const PROVIDER_COLOUR: Record<string, string> = {
+  anthropic: '#d97757',      // official: Claude
+  openai: '#10a37f',         // official: ChatGPT
+  google: '#4285f4',         // official: Google blue
+  mimo: '#ff6900',           // official: Xiaomi
+  'command-code': '#7b5bff', // official: site accent
+  xai: '#6b7280',            // chosen: monochrome brand
+  cursor: '#c08532',         // chosen: site highlight
+  devin: '#d946ef',          // chosen
+  kimi: '#06b6d4',           // chosen
+  'ollama-cloud': '#a16207', // chosen
+  'opencode-go': '#65a30d',  // chosen
+  unknown: '#9ca3af',
+};
+function providerColours(ids: string[]): Map<string, string> {
+  let spare = 0;
+  return new Map(ids.map(id => [id, PROVIDER_COLOUR[id] ?? PALETTE[spare++ % PALETTE.length] ?? '#888']));
+}
 
 export function costsView(ctx: UiContext): HTMLElement {
   const costs = asRecord(asRecord(ctx.snapshot?.analytics)?.costs);
@@ -836,7 +858,7 @@ export function costsView(ctx: UiContext): HTMLElement {
   const series = costSeries(asRecord(asRecord(costs.series)?.[costSelection]));
   const providerOrder = [...new Set(series.buckets.flatMap(b => Object.keys(b.byProvider)))]
     .sort((a, b) => series.buckets.reduce((s, d) => s + (d.byProvider[b] ?? 0), 0) - series.buckets.reduce((s, d) => s + (d.byProvider[a] ?? 0), 0));
-  const colour = new Map(providerOrder.map((id, i) => [id, PALETTE[i % PALETTE.length] ?? '#888']));
+  const colour = providerColours(providerOrder);
   const names = new Map((ctx.snapshot?.providers ?? []).map(p => [p.id, p.name]));
   if (series.buckets.length) section.append(bucketChart(series, providerOrder, colour, names, label));
   if (period) {
@@ -851,8 +873,8 @@ export function costsView(ctx: UiContext): HTMLElement {
   return section;
 }
 
-type CostBucket = {from: string; to: string; apiUsd: number; requests: number; tokens: number; unpricedRequests: number; byProvider: Record<string, number>; byModel: Record<string, number>};
-type CostSeries = {bucketHours: number; buckets: CostBucket[]};
+type CostBucket = {from: string; to: string; apiUsd: number; requests: number; tokens: number; unpricedRequests: number; byProvider: Record<string, number>; byModel: Record<string, number>; trailingUsd: number | null; trailingComplete: boolean};
+type CostSeries = {bucketHours: number; spanHours: number; buckets: CostBucket[]};
 
 function amounts(value: unknown): Record<string, number> {
   const out: Record<string, number> = {};
@@ -864,9 +886,10 @@ function costSeries(value: unknown): CostSeries {
   const buckets = Array.isArray(o.buckets) ? o.buckets.flatMap(item => {
     const b = asRecord(item);
     return b ? [{from: str(b.from) ?? '', to: str(b.to) ?? '', apiUsd: n0(b.apiUsd), requests: n0(b.requests), tokens: n0(b.tokens),
-      unpricedRequests: n0(b.unpricedRequests), byProvider: amounts(b.byProvider), byModel: amounts(b.byModel)}] : [];
+      unpricedRequests: n0(b.unpricedRequests), byProvider: amounts(b.byProvider), byModel: amounts(b.byModel),
+      trailingUsd: num(b.trailingUsd), trailingComplete: b.trailingComplete === true}] : [];
   }) : [];
-  return {bucketHours: n0(o.bucketHours), buckets};
+  return {bucketHours: n0(o.bucketHours), spanHours: n0(o.spanHours), buckets};
 }
 
 const barTime = new Intl.DateTimeFormat('ko-KR', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false});
@@ -878,7 +901,8 @@ function barRange(b: {from: string; to: string}, hours: number): string {
   const sameDay = from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth() && from.getDate() === to.getDate();
   // A bar ending exactly at midnight belongs to the same day it started.
   const endsAtMidnight = to.getHours() === 0 && to.getTime() - from.getTime() <= 24 * 3600000 && new Date(to.getTime() - 1).getDate() === from.getDate();
-  return `${barTime.format(from)} – ${sameDay || endsAtMidnight ? `${String(to.getHours()).padStart(2, '0')}:00` : barTime.format(to)}`;
+  const hhmm = `${String(to.getHours()).padStart(2, '0')}:${String(to.getMinutes()).padStart(2, '0')}`;
+  return `${barTime.format(from)} – ${sameDay || endsAtMidnight ? hhmm : barTime.format(to)}`;
 }
 function axisLabel(iso: string, hours: number): string {
   const d = new Date(iso);
@@ -922,9 +946,11 @@ function detailNodes(range: string, d: BarDetail, colour: Map<string, string>): 
 // A stacked bar chart shared by the cost and quota views. Each bar is split by
 // key (provider or account); hovering, tapping or arrow-keying a bar shows the
 // detail that describe() returns for it.
-type StackedBar = {from: string; to: string; parts: Record<string, number>; total: number | null};
+// line: an optional series drawn over the bars in the same unit (null = no point);
+// lineComplete=false marks points whose window reaches past the retained history.
+type StackedBar = {from: string; to: string; parts: Record<string, number>; total: number | null; line?: number | null; lineComplete?: boolean};
 function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: string; order: string[]; colour: Map<string, string>;
-    names: Map<string, string>; valueLabel: (v: number) => string; describe: (i: number) => BarDetail}): HTMLElement {
+    names: Map<string, string>; valueLabel: (v: number) => string; describe: (i: number) => BarDetail; lineLabel?: string}): HTMLElement {
   const {bars, bucketHours, order, colour, names} = opts;
   const box = node('figure', 'daily-chart');
   const cap = node('figcaption');
@@ -936,9 +962,15 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
     item.append(sw, node('span', '', names.get(id) ?? id));
     legend.append(item);
   }
+  const hasLine = !!opts.lineLabel && bars.some(b => typeof b.line === 'number');
+  if (hasLine) {
+    const item = node('span', 'legend-item legend-line');
+    item.append(node('span', 'line-swatch'), node('span', '', opts.lineLabel ?? ''));
+    legend.append(item);
+  }
   cap.append(legend);
   box.append(cap);
-  const max = Math.max(1e-9, ...bars.map(b => b.total ?? 0));
+  const max = Math.max(1e-9, ...bars.map(b => Math.max(b.total ?? 0, hasLine ? b.line ?? 0 : 0)));
   const plot = node('div', 'chart-plot');
   const W = 600, H = 160, pad = bars.length > 30 ? 1 : 2, bw = W / bars.length;
   const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', class: 'bars'});
@@ -974,6 +1006,21 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
     g.addEventListener('click', () => show(i));
     chart.append(g);
   });
+  if (hasLine) {
+    // Two paths over the same points: solid where the moving window is fully
+    // covered by retained history, dashed where it is not yet.
+    const pt = (i: number) => `${(i + 0.5) * bw},${H - (bars[i]?.line ?? 0) / max * (H - 4)}`;
+    const segs = {full: [] as string[], partial: [] as string[]};
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i], n = bars[i + 1];
+      if (typeof b?.line !== 'number' || typeof n?.line !== 'number') continue;
+      (b.lineComplete && n.lineComplete ? segs.full : segs.partial).push(`M${pt(i)}L${pt(i + 1)}`);
+    }
+    const line = svg('g', {class: 'trend'});
+    if (segs.partial.length) line.append(svg('path', {d: segs.partial.join(''), class: 'trend-line partial', 'vector-effect': 'non-scaling-stroke'}));
+    if (segs.full.length) line.append(svg('path', {d: segs.full.join(''), class: 'trend-line', 'vector-effect': 'non-scaling-stroke'}));
+    chart.append(line);
+  }
   chart.addEventListener('mouseleave', hide);
   let focusIndex = bars.length - 1;
   chart.setAttribute('tabindex', '0');
@@ -1024,10 +1071,17 @@ function stackedChart(opts: {bars: StackedBar[]; bucketHours: number; title: str
 }
 
 function bucketChart(series: CostSeries, order: string[], colour: Map<string, string>, names: Map<string, string>, spanLabel: string): HTMLElement {
-  const {buckets, bucketHours} = series;
+  const {buckets, bucketHours, spanHours} = series;
   const unit = bucketHours >= 24 ? '일별' : `${bucketHours}시간 단위`;
+  // The line is the trailing span's total rescaled to one bar: the average
+  // amount per bar over the last 24 hours / 7 days / 30 days at each bar's end.
+  // Bars clipped to the span edge are shorter than bucketHours, but the average
+  // is still stated per full bar so it reads against a full bar's height.
+  const perBar = (b: CostBucket) => b.trailingUsd === null || spanHours <= 0 ? null : b.trailingUsd * bucketHours / spanHours;
+  const spanWord = spanHours >= 24 * 28 ? '30일' : spanHours >= 24 * 7 ? '7일' : '24시간';
   return stackedChart({
-    bars: buckets.map(b => ({from: b.from, to: b.to, parts: b.byProvider, total: b.apiUsd})),
+    bars: buckets.map(b => ({from: b.from, to: b.to, parts: b.byProvider, total: b.apiUsd, line: perBar(b), lineComplete: b.trailingComplete})),
+    lineLabel: `${spanWord} 이동평균`,
     bucketHours, title: `최근 ${spanLabel} ${unit} 환산액`, order, colour, names, valueLabel: v => usd(v),
     describe: i => {
       const b = buckets[i];
@@ -1040,6 +1094,7 @@ function bucketChart(series: CostSeries, order: string[], colour: Map<string, st
         rows: Object.entries(b.byProvider).sort((x, y) => y[1] - x[1]).slice(0, 5)
           .map(([id, amount]) => ({id, name: names.get(id) ?? id, values: [money(amount), share(amount)]})),
         notes: [
+          ...(b.trailingUsd !== null ? [`${spanWord} 이동평균 ${money(perBar(b) ?? 0)}/${bucketHours >= 24 ? '일' : `${bucketHours}시간`} · 직전 ${spanWord} 합계 ${money(b.trailingUsd)}${b.trailingComplete ? '' : ' (기록이 기간보다 짧음)'}`] : []),
           ...(models.length ? ['상위 모델 · ' + models.map(([m, a]) => `${m.split('/').slice(1).join('/') || m} ${money(a)}`).join(' · ')] : []),
           ...(b.unpricedRequests ? [`단가 미확인 ${count.format(b.unpricedRequests)}회 제외`] : []),
         ],
@@ -1145,7 +1200,7 @@ export function quotaView(ctx: UiContext): HTMLElement {
 
   const base = rows.find(r => r.bars.length) ?? rows[0];
   const order = [...rows].sort((a, b) => (b.total ?? 0) - (a.total ?? 0)).map(r => r.provider.id);
-  const colour = new Map(order.map((id, i) => [id, PALETTE[i % PALETTE.length] ?? '#888']));
+  const colour = providerColours(order);
   const names = new Map(rows.map(r => [r.provider.id, r.provider.name]));
   const byId = new Map(rows.map(r => [r.provider.id, r]));
   if (base && base.bars.length) {

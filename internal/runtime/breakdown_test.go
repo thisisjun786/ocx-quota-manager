@@ -133,3 +133,64 @@ func TestBucketSeriesUsesPeriodBarSizes(t *testing.T) {
 		t.Fatalf("week %s..%s month bars %d", week[0].From, week[len(week)-1].To, len(month))
 	}
 }
+
+func TestBucketSeriesTrailingTotalIsTheSpanEndingAtEachBar(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2027, 1, 10, 12, 30, 0, 0, loc).UnixMilli()
+	usd := func(v float64) *float64 { return &v }
+	model := "m"
+	h := int64(calc.HourMs)
+	rows := []store.Usage{
+		{ID: "old", At: now - 30*h, Provider: "p", Model: &model},
+		{ID: "a", At: now - 20*h, Provider: "p", Model: &model},
+		{ID: "b", At: now - 3*h, Provider: "p", Model: &model},
+		{ID: "c", At: now - h/2, Provider: "p", Model: &model},
+	}
+	prices := []calc.AppliedPrice{{USD: usd(100)}, {USD: usd(10)}, {USD: usd(2)}, {USD: nil}}
+	out := costBreakdown(rows, prices, nil, now, loc)
+	day := out["series"].(map[string]any)["day"].(map[string]any)
+	if day["spanHours"].(float64) != 24 {
+		t.Fatalf("span %v", day["spanHours"])
+	}
+	bars := day["buckets"].([]costBucket)
+	last := bars[len(bars)-1]
+	// The last bar ends now: its 24-hour window holds a and b (12), not old
+	// (30h ago) and not the unpriced c.
+	if last.TrailingUsd != 12 || !last.TrailingComplete {
+		t.Fatalf("last %+v", last)
+	}
+	if total := out["periods"].(map[string]any)["day"].(costPeriod).Total.APIUsd; total != last.TrailingUsd {
+		t.Fatalf("last trailing %v != 24h total %v", last.TrailingUsd, total)
+	}
+	// The bar ending at 11:00 covers 11:00 the day before to 11:00: a (16:30
+	// the day before) and b (09:30), not old (06:30 the day before).
+	var at11 *costBucket
+	for i := range bars {
+		if bars[i].To == "2027-01-10T11:00:00Z" {
+			at11 = &bars[i]
+		}
+	}
+	if at11 == nil || at11.TrailingUsd != 12 {
+		t.Fatalf("11:00 %+v", at11)
+	}
+	// A row exactly 24 hours before a bar's end lies outside that bar's window
+	// and inside the previous one, the same (from, to] rule as the 24h total.
+	edge := time.Date(2027, 1, 9, 11, 0, 0, 0, loc).UnixMilli()
+	withEdge := append([]store.Usage{rows[0], {ID: "edge", At: edge, Provider: "p", Model: &model}}, rows[1:]...)
+	edgePrices := append([]calc.AppliedPrice{prices[0], {USD: usd(1000)}}, prices[1:]...)
+	bars = costBreakdown(withEdge, edgePrices, nil, now, loc)["series"].(map[string]any)["day"].(map[string]any)["buckets"].([]costBucket)
+	for _, b := range bars {
+		if b.To == "2027-01-10T11:00:00Z" && b.TrailingUsd != 12 {
+			t.Fatalf("a row at the window start leaked in: %+v", b)
+		}
+	}
+	// A 7-day window at the first week bar starts 14 days back, long before
+	// the oldest row, so its total is marked incomplete.
+	week := out["series"].(map[string]any)["week"].(map[string]any)["buckets"].([]costBucket)
+	if week[0].TrailingComplete {
+		t.Fatalf("a 7-day window starting 14 days back cannot be complete with 30 hours of rows: %+v", week[0])
+	}
+	if week[len(week)-1].TrailingUsd != 112 {
+		t.Fatalf("7-day window at now holds every priced row: %+v", week[len(week)-1])
+	}
+}
