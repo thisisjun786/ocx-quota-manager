@@ -1,13 +1,21 @@
 # Development
 
-## Development
+Everything outside Go is TypeScript: the UI in `web/src`, and the build scripts, browser checks
+and contract tests in `scripts/` and `tests/`, which Node 24 runs directly.
 
 ```sh
-npm run check
-npm test
+npm ci
+go vet ./... && go test -race ./...
+npm run typecheck       # web/ and scripts/ + tests/ (tsconfig.tools.json)
+npm test                # contract, store-compatibility and embed tests
 npm run check:ui        # every screen, needs a Chromium binary
-npm run check:ui:flow   # the route from the summary to a price check and back, on its own
+npm run check:ui:flow   # the route from the summary to account detail and back, on its own
+npm run check:port:ui   # the release binary's embed and guards in headless Chromium
 ```
+
+The browser checks build the UI, sync `webembed/static`, and run the Go `cmd/ui-fixture` server
+against a synthetic snapshot from `scripts/ui-fixture.ts`. The server re-reads that snapshot on every
+request, so a check that changes the world writes it again (`publish()`) before refreshing.
 
 `npm run check:ui:flow` walks one route in a real headless browser: summary, period, provider and
 account, calculation detail, price check, source, back, and then the same screen with the server
@@ -30,20 +38,10 @@ scoped price list, and the disconnected state, each in light and dark at 1280px 
 never reports success: it says `PARTIAL`, states that it is not a pass, and exits non-zero, because
 a run that skipped the states this route exists to watch must not be quotable as a whole one.
 
-`src/snapshot.mjs` owns source-file translation, `src/server.mjs` owns HTTP, `public/` owns presentation. Tests use isolated synthetic files and ephemeral loopback ports. No tests call paid providers. Use isolated test data and compare the rendered dashboard at desktop, tablet and mobile widths.
+Go tests use isolated synthetic files and ephemeral loopback ports. No test calls a paid provider.
+Behaviour lives in Go packages and is tested there: quota readings in `internal/calc`, history and
+retention in `internal/store`, provider reads in `internal/collect`, and the assembled response in
+`internal/runtime`.
 
-`tests/integration-contract.test.mjs` holds only what no single module owns: the response where
-several states are wrong at once. It drives a real collector against a temporary OpenCodex home
-and checks that an unpriced model, a model the configuration dropped and a failed usage read stay
-three separate facts; that the five usage periods end at one anchor and carry one set of totals on
-the account, the provider and the price-gap surfaces; and that the source status, the retained
-price record and the price-gap report never contradict each other in the same payload.
-
-The same file checks what the macOS client reads. Its decode surface is transcribed by hand from
-`macos/Sources/QuotaModel.swift`, and a test compares that transcription against the Swift source,
-so a field added, removed or made optional over there fails in Node before anyone opens Xcode. The
-saved menu-bar key is checked the same way: the order of its parts is compared in both
-`public/views.js` and the Swift panel, because swapping two parts keeps every part and still breaks
-every saved selection. **None of this runs Swift.** `bash macos/build.sh` on a Mac is the only real
-decode proof, and it refuses to run anywhere else. When the mirror test fails, either the
-transcription is stale or the contract genuinely changed — decide which before editing the table.
+The macOS client's decode surface is checked only by `bash macos/build.sh` on a Mac; nothing here
+runs Swift.

@@ -3,8 +3,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-node scripts/build-web.mjs
-node scripts/web-assets.mjs sync web/dist/ui webembed/static
+node scripts/build-web.ts
+node scripts/web-assets.ts sync web/dist/ui webembed/static
 
 mkdir -p dist
 ver="$(git rev-parse HEAD)"

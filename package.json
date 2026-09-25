@@ -7,19 +7,16 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/server.mjs",
-    "compare:ollama": "node src/ollama-comparison.mjs",
-    "check": "node --check src/snapshot.mjs && node --check src/server.mjs && node --check src/identity.mjs && node --check src/history.mjs && node --check src/time.mjs && node --check src/analytics.mjs && node --check src/recommendation.mjs && node --check src/provider-refresh.mjs && node --check src/ollama.mjs && node --check src/collector.mjs && node --check src/collector-runtime.mjs && node --check src/model-roster.mjs && node --check src/pricing.mjs && node --check src/opencode-pricing.mjs && node --check src/pricing-catalog.mjs && node --check src/provider-prices.mjs && node --check src/price-gaps.mjs && node --check src/cursor-cache.mjs && node --check src/ollama-comparison.mjs && node --check src/ollama-comparison-report.mjs && node --check src/credential-source.mjs && node --check src/account-binding.mjs && node --check src/quota-transport.mjs && node --check src/quota-measurement.mjs && node --check src/quota-consumption.mjs && node --check src/quota-observations.mjs && node --check src/direct-quota.mjs && node --check src/direct-adapters.mjs && node --check src/devin-quota.mjs && node --check src/command-code-quota.mjs && node --check src/opencode-go-quota.mjs && node --check src/provider-quota-adapters.mjs && node --check public/app.js && node --check public/format.js && node --check public/quota.js && node --check public/dom.js && node --check public/views.js",
-    "check:port": "node scripts/check-port.mjs",
-    "check:port:ui": "node scripts/check-port-ui.mjs",
-    "typecheck": "node node_modules/typescript/bin/tsc -p web/tsconfig.json --pretty false && node node_modules/typescript/bin/tsc -p web/tsconfig.ui.json --pretty false --noEmit",
-    "build:web": "node scripts/build-web.mjs",
-    "test": "node --test tests/*.test.mjs",
-    "confirm:scope": "node scripts/confirm-scope.mjs",
-    "check:ui": "node scripts/ui-check.mjs",
-    "check:ui:flow": "node scripts/ui-flow.mjs"
+    "check:port": "node scripts/check-port.ts",
+    "check:port:ui": "node scripts/check-port-ui.ts",
+    "typecheck": "node node_modules/typescript/bin/tsc -p web/tsconfig.json --pretty false && node node_modules/typescript/bin/tsc -p web/tsconfig.ui.json --pretty false --noEmit && node node_modules/typescript/bin/tsc -p tsconfig.tools.json --pretty false",
+    "build:web": "node scripts/build-web.ts",
+    "test": "node --test tests/*.test.ts",
+    "check:ui": "node scripts/ui-check.ts",
+    "check:ui:flow": "node scripts/ui-flow.ts"
   },
   "devDependencies": {
+    "@types/node": "^24.13.6",
     "typescript": "5.6.3"
   }
 }

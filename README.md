@@ -76,14 +76,15 @@ masked in the API. The history database is personal usage data, so it is created
 
 ```sh
 npm ci
-npm run typecheck && npm test            # UI types and Node tests
+npm run typecheck && npm test            # TypeScript types and contract tests
 go vet ./... && go test -race ./...      # Go tests
 bash scripts/build-quota-manager.sh      # dist/quota-manager + manifest
 npm run check:port:ui                    # real binary in headless Chromium
 ```
 
-`cmd/quota-manager` and `internal/` are the server, `web/src` is the UI (compiled into `webembed/`), and
-`src/` + `public/` are the earlier Node implementation, still used as a reference by the tests.
+`cmd/quota-manager` and `internal/` are the server; `web/` is the UI (TypeScript, compiled into `webembed/`).
+Prices live in `internal/store/price_rules.json` and subscription fees in
+`internal/runtime/subscription_catalog.json`; see [pricing](docs/quota-and-pricing.md#editing-prices).
 
 ## Documentation
 

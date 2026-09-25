@@ -27,8 +27,7 @@ These keep their original spelling, so a global search and replace of the old na
   `OpenCodex Quota Monitor`
 - `QUOTA_DATA_DIR` and its default `~/.local/state/quota-monitor`
 - the browser key `quota-monitor.provider-order.v1`
-- the log prefixes in `src/server.mjs` and `src/collector.mjs`
-- the source-identity salt `quota-monitor-ollama` in `src/ollama.mjs`
+- the source-identity salt `quota-monitor-ollama` in `internal/runtime/ollama.go`
 - `macos/Info.plist` `CFBundleIdentifier` `local.quota-monitor.menubar` and `CFBundleName`
   `Quota Monitor`, and the bundle paths in `macos/build.sh`
 
@@ -40,7 +39,7 @@ On a Mac with Xcode Command Line Tools, run `bash macos/build.sh`. This runs the
 
 The 400-point popover has a summary and a three-column provider selector with account quota bars. The native NSPopover has explicit content-driven sizing: a reserved loading viewport, measured chrome and body, and a screen-height cap. Provider navigation scrolls independently after 120 points. A pin beside a summary limit selects the provider percentage shown in the menu bar; different quota periods and providers are never merged into an invented global percentage. The app refreshes every 30 seconds. Failed refreshes retain the previous snapshot with a connection warning; locally expired observations become unavailable. Settings accepts an HTTPS server origin and persists it on the Mac. The default is `http://127.0.0.1:8787`; set your Tailscale HTTPS address there; the Mac needs access to that tailnet. The app reads only `/api/v1/snapshot`, requires no provider credentials, and has no account-switching, inference, cost-analysis, or background server functionality.
 
-`macos/Sources/QuotaModel.swift` shares `public/app.js`'s matching-window average rule and its hidden Codex Spark windows across the JSON boundary. It also checks observation age/reset time locally so offline data cannot stay current indefinitely. Nullable `stale` values are accepted with those timestamp checks. Tests live in `macos/Tests/`.
+`macos/Sources/QuotaModel.swift` shares the web UI's matching-window average rule and its hidden Codex Spark windows across the JSON boundary. It also checks observation age/reset time locally so offline data cannot stay current indefinitely. Nullable `stale` values are accepted with those timestamp checks. Tests live in `macos/Tests/`.
 
 Verification on 2026-09-10: Apple Silicon/macOS 26, Swift 6.3.3 compiled the macOS 13-targeted app; standalone model tests passed, including null-stale, expiration, invalid ranges, and paused/reauth account cases. The native URLSession client decoded the live server, which served 6 providers and 10 accounts that day; both counts follow the OpenCodex configuration and change as providers and accounts are added. Accessibility inspection confirmed the menu-bar percentage title. AppKit-hosted rendering was used for summary and account layout inspection; remote screen capture and actual popover interaction were unavailable, so no complete interactive UI pass is claimed. `macos/build/` contains the ignored local ZIP and render previews.
 
@@ -54,7 +53,7 @@ bash scripts/build-quota-manager.sh
 # dist/quota-manager.manifest.json
 ```
 
-`QUOTA_PUBLIC_DIR` must contain every required module (`app.js`, `format.js`, `quota.js`, `dom.js`, `views.js`, `types.js`, `contract.js`, `index.html`, `style.css`). An incomplete directory is fatal; the process does not fall back to the embedded copy. Module URLs keep the `.js` suffix and match the Go static allowlist. Verify the TypeScript build and the real binary (not the Node `check:ui` path) with:
+`QUOTA_PUBLIC_DIR` must contain every required module (`app.js`, `format.js`, `quota.js`, `dom.js`, `views.js`, `types.js`, `contract.js`, `index.html`, `style.css`). An incomplete directory is fatal; the process does not fall back to the embedded copy. Module URLs keep the `.js` suffix and match the Go static allowlist. Verify the TypeScript build and the real binary with:
 
 ```sh
 npm run typecheck

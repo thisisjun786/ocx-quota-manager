@@ -29,7 +29,7 @@ whose account has not been read for fifteen minutes, or whose reset has passed, 
 the reason, whether or not a new response ever arrives. Losing the network is stated differently from
 a server that cannot be reached, because the two behave differently — an unreachable server is asked
 again every ten seconds, while a browser reporting no network stops asking until it returns.
-`scripts/ui-flow.mjs` step 08 is the check for all of this.
+`scripts/ui-flow.ts` step 08 is the check for all of this.
 
 ### OCX GUI reference
 
@@ -53,7 +53,7 @@ Reference commit `c15a98caa9ab4b24256bd16a49b0947bea72d5c6` of OpenCodex, files 
 
 ### Tokens
 
-`public/style.css` is the web token source and the only place a literal colour appears. Colours are declared once with `light-dark()`, so light and dark are one definition instead of two blocks.
+`web/style.css` is the web token source and the only place a literal colour appears. Colours are declared once with `light-dark()`, so light and dark are one definition instead of two blocks.
 
 - Surfaces: `--bg`, `--rail`, `--surface`, `--raised`, `--raised-hover`, `--border`, `--border-soft`
 - Text: `--text`, `--muted`, `--faint`

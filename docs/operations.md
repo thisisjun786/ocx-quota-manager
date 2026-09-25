@@ -134,87 +134,33 @@ Four things can legitimately disagree, and each is read differently.
 | Reading | How to read it | What it does not tell you |
 |---|---|---|
 | Source commit | `git -C <checkout> rev-parse HEAD` and `git -C <checkout> status --porcelain` | Nothing about what is installed. A dirty tree is not a release candidate |
-| Installed release | `systemctl --user show quota-monitor.service -p WorkingDirectory --value` **and** `-p ExecStart --value`, then check that directory against the `manifest` in the most recent `deployment.json` | The directory name is not necessarily a commit. It can be the digest of the deployed archive. And `WorkingDirectory` alone does not say what runs: Node loads `server.mjs` and its relative imports from the `ExecStart` path |
-| Running service | `systemctl --user show quota-monitor.service -p ActiveState -p ExecMainPID -p ExecMainStartTimestamp -p NRestarts`, then `readlink /proc/<pid>/cwd` **and** the process command line in `/proc/<pid>/cmdline` | Editing the unit file changes nothing until a restart, so the running path can be an older release. The cwd alone can agree while the command line runs code from somewhere else |
-| Last collection | `curl -s http://127.0.0.1:8787/api/v1/snapshot` and read `analytics.status`, `lastCollectedAt`, `usageObservedAt`, `usageObservedSince`, `historyStartedAt` | A file modification time is not a collection time |
+| Installed release | `readlink -f <prefix>/releases/current`, and `sourceCommit` / `release` in the latest `<snapshots>/deploy-<UTC>/deployment.json` | The directory name is the binary's hash prefix, not a commit |
+| Running service | `systemctl --user show quota-monitor.service -p ActiveState -p ExecMainPID -p ExecStart`, then `readlink /proc/<pid>/exe` | Editing the unit changes nothing until a restart, so the running binary can be an older release |
+| Last collection | `curl -s http://127.0.0.1:8787/api/v1/snapshot` and read `analytics.status`, `lastCollectedAt`, `usageObservedAt` | A file modification time is not a collection time |
 
-A matching manifest proves the installed files have not changed since they were deployed. It does
-not prove where they came from; that is what `sourceHead` and the recorded overlay list in
-`deployment.json` are for. The two are different claims.
-
-Comparing the installed files against that manifest:
+Each release directory holds `quota-manager` and `quota-manager.manifest.json`, which records the
+binary's sha256 and every embedded UI asset's. Confirming the running binary is the recorded one:
 
 ```sh
-UNIT=quota-monitor.service
-PID=$(systemctl --user show $UNIT -p ExecMainPID --value)
-node --input-type=module -e "import {createHash} from 'node:crypto'; import {readFile} from 'node:fs/promises';\
-  const rec = JSON.parse(await readFile(process.argv[1], 'utf8'));\
-  const [wd, execStart, runCwd, pid] = process.argv.slice(2);\
-  const runArgs = (await readFile('/proc/' + pid + '/cmdline', 'utf8')).split('\0').filter(Boolean);\
-  const runEnv = (await readFile('/proc/' + pid + '/environ', 'utf8')).split('\0');\
-  const unitArgs = execStart.match(/^\{ path=([^ ;]+) ; argv\[\]=([^;]+) ; /);\
-  const expected = [rec.nodeExecutable, rec.release + '/src/server.mjs'];\
-  const same = args => args?.length === 2 && args.every((v, i) => v === expected[i]);\
-  const off = [];\
-  if (!rec.nodeExecutable || !rec.manifest['src/server.mjs']) off.push('missing executable or entrypoint provenance');\
-  if (!unitArgs || unitArgs[1] !== expected[0] || !same(unitArgs[2].trim().split(/\s+/))) off.push('unsupported ExecStart argv');\
-  if (!same(runArgs)) off.push('unsupported running argv');\
-  if (runEnv.some(v => v.startsWith('NODE_OPTIONS=') && v.slice(13).trim())) off.push('NODE_OPTIONS is not supported');\
-  if (wd !== rec.release) off.push('WorkingDirectory');\
-  if (runCwd !== rec.release) off.push('running cwd');\
-  if (off.length) { console.log(JSON.stringify({ error: 'these do not point at the recorded release',\
-    recorded: rec.release, off }, null, 1)); process.exit(1); }\
-  const bad = [];\
-  for (const [f, want] of Object.entries(rec.manifest)) {\
-    const got = createHash('sha256').update(await readFile(rec.release + '/' + f)).digest('hex');\
-    if (got !== want) bad.push(f); }\
-  console.log(JSON.stringify({ release: rec.release, sourceHead: rec.sourceHead,\
-    entries: Object.keys(rec.manifest).length, mismatched: bad }, null, 1));\
-  process.exitCode = bad.length ? 1 : 0;" \
-  <snapshots>/<branch>/deploy-<UTC>/deployment.json \
-  "$(systemctl --user show $UNIT -p WorkingDirectory --value)" \
-  "$(systemctl --user show $UNIT -p ExecStart --value)" \
-  "$(readlink /proc/$PID/cwd)" \
-  "$PID"
+PID=$(systemctl --user show quota-monitor.service -p ExecMainPID --value)
+REL=$(dirname "$(readlink -f /proc/$PID/exe)")
+python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["binarySha256"])' "$REL/quota-manager.manifest.json"
+sha256sum "$REL/quota-manager"
 ```
 
-The four arguments after the record are what make this a check rather than a formality. Without them
-the command hashes whatever directory the record names, so a stale record or a hand-edited unit would
-produce an empty `mismatched` list for a release that is not the one running. All four have to agree
-with the record before a single file is hashed: `WorkingDirectory` and `ExecStart` can diverge in the
-unit, and the running process can differ from both until someone restarts it.
-
-This check supports this installation's exact invocation: the recorded `nodeExecutable` followed
-by the manifest-covered `src/server.mjs`, with no other arguments. It compares the complete
-NUL-separated process argv and rejects nonempty `NODE_OPTIONS`, so a decoy first script, preload
-or option cannot be mistaken for the entrypoint. It deliberately rejects other systemd output
-formats, paths containing whitespace, and Node invocation styles rather than guessing. Record
-`nodeExecutable` in `deployment.json`; an older record without it needs an explicit provenance
-update before this check can pass. This identifies the running entrypoint, not arbitrary loader
-or operating-system tampering.
-
-It also exits non-zero when anything is wrong — a disagreeing pointer or a file whose hash moved.
-Printing a populated `mismatched` list and still exiting 0 would let any automation calling this
-wave through an installation that has been modified since it was deployed.
+The two hashes must match; a mismatch means the file changed after it was installed. The manifest
+proves the file is unchanged since the build, not which commit it came from — `sourceCommit` in
+`deployment.json` records that.
 
 Which disagreements are acceptable:
 
 - Source ahead of the installed release: normal between a merge and a deployment.
-- `deploy/quota-monitor.service` naming a different release than the installed unit: read the
-  installed one, because that is the fact and the repository file is only a template — but do not
-  leave it that way. A lagging template is a rollback waiting to happen: the release it still names
-  is usually the one the current deployment replaced, so installing it unchanged would quietly put
-  the previous build back. A unit file with valid syntax starts without complaint, so the first
-  sign would be the responses changing. Bring the template back in sync as its own change, separate
-  from any deployment.
-- An installed release matching no commit tree: fine when the deployment record says it was a base
-  plus a named overlay, and a problem when the record says otherwise.
-- The running process working directory differing from the installed unit: not acceptable. A
-  restart is missing.
+- The running binary differing from `releases/current`: not acceptable. A restart is missing.
 - `lastCollectedAt` older than twice the collection interval: not acceptable.
 
-Run the gates on the release candidate source: `npm run check`, `npm test`, `npm run check:ui` and
-`npm run check:ui:flow`. The last two need a Chromium binary.
+Run the gates on the release candidate source (see [Development](development.md)); `scripts/deploy.sh`
+then builds, installs, waits for `/healthz` and `/api/v1/snapshot`, and restores the previous unit if
+the new one does not become healthy.
 
 ### Direct quota adapters change what the check covers
 

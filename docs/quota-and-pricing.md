@@ -70,11 +70,8 @@ measured at and a history sample is recorded at that instant rather than at the 
 `account.updatedAt` still reports the newest reading, which is what decides whether the
 account as a whole looks current, and the published response is unchanged.
 
-Registering the adapters is what enables this path. `src/provider-quota-adapters.mjs` exports
-the list, `src/collector.mjs` re-exports it as `PROVIDER_QUOTA_ADAPTERS`, and a caller turns
-direct collection on by passing it as `directAdapters` to `createCollector`. Adding a
-provider is adding an entry to that list; a provider may appear more than once, and the order
-is the merge precedence.
+Registering the adapters is what enables this path. The adapters live in `internal/collect`;
+adding a provider is adding a parser there and registering it with the collector.
 
 The service entry point turns this on through `QUOTA_DIRECT_PROVIDERS`, a comma-separated
 list of provider ids. Unset or blank is off, and off passes `createCollector` the same empty
@@ -207,7 +204,7 @@ The 1pp envelope is a calculation assumption, not proof that a provider refunded
 
 Account attribution follows installed OpenCodex's durable `main`, `p<hex6>` and `o<hex6>` labels, including `main` and `p<hex6>` provider suffixes. OAuth `o<hex6>` attribution uses the explicit `accountLogLabel` field. Ambiguous, removed or unlabeled accounts stay in provider totals and an unattributed subtotal; they are never assigned to today's selected account. Historical identity changes behind the `main` label cannot be reconstructed from usage logs alone.
 
-Implementation: `src/history.mjs` owns storage and ingestion, `src/identity.mjs` owns account label/plan matching, `src/analytics.mjs` owns estimates, `src/pricing.mjs` owns price provenance, and `src/collector.mjs` owns the timer and lifecycle.
+Implementation: `internal/store` owns storage, ingestion, identity matching and price provenance, `internal/calc` and `internal/runtime` own the estimates, and `internal/collect` owns the timer and provider reads.
 
 ### Subscription count suggestions
 
@@ -227,9 +224,9 @@ Subscription prices affect only the optional budget estimate, never the count.
 
 ### Confirmed subscriptions and Ollama credit comparison (2026-09-10)
 
-The bundled subscription table uses these monthly prices (edit it for your plans): ChatGPT Pro $200, Claude Max $200, Grok $300, Cursor Ultra $200, legacy Ollama Cloud Max $100, and OpenCode Go $10 per account. `USER_SUBSCRIPTIONS` in `src/pricing.mjs` explicitly supplies these overrides to snapshot analytics with `basis: user-confirmed`. They take precedence over incomplete provider plan claims; generic `lookupSubscription(provider, plan)` still requires a known plan unless overrides are passed. Provider and overview subscription totals count all registered accounts. These amounts do not set quota capacities or imply migration to a new plan.
+The bundled subscription table uses these monthly prices (edit it for your plans): ChatGPT Pro $200, Claude Max $200, Grok $300, Cursor Ultra $200, legacy Ollama Cloud Max $100, and OpenCode Go $10 per account. `overrides` in `internal/runtime/subscription_catalog.json` supplies these with `basis: user-confirmed`. They take precedence over incomplete provider plan claims; the `plans` table still requires a known plan. Provider and overview subscription totals count all registered accounts. These amounts do not set quota capacities or imply migration to a new plan.
 
-`npm run compare:ollama -- --days 30 --json /absolute/output.json --html /absolute/output.html` reads the existing OpenCodex `usage.jsonl` without modifying it or the monitor database. `--log PATH`, `--from ISO`, `--to ISO`, and `--cache-rate 0.8` allow an explicit source, interval, and cache assumption. The generated HTML is self-contained and lets the reader change the cache rate locally. Output contains model/provider aggregates, never account labels, request IDs, prompts, or credentials. Keep these personal reports outside the repository.
+The standalone Ollama credit-comparison report was part of the retired Node implementation and is no longer shipped.
 
 The default cache assumption is the sum of reported cache-read tokens divided by reported input tokens from other providers in the same interval. Only records with valid explicit cache fields enter this denominator; estimated tokens, absent cache, and Ollama itself are excluded. Ollama records with actual cache values keep them, including a measured zero. Only missing cache fields use the assumption. Missing reference data leaves the estimate unavailable until a manual rate is supplied. Models without a published cache price retain full input price and are counted separately.
 
@@ -261,7 +258,7 @@ API reference sources: [OpenAI](https://developers.openai.com/api/docs/pricing),
 
 ### New model prices and DeepSeek V4.1 Flash (2026-09-10)
 
-`src/opencode-pricing.mjs` uses the [Go-specific official price table](https://opencode.ai/docs/go/), including Qwen/Grok/Luna context thresholds. Zen and Ollama have different tariffs and are not aliases for Go. Go DeepSeek peak hours are weekdays 01:00–04:00 and 06:00–10:00 UTC; Ollama retains its own 12:00–18:00 UTC schedule.
+The OpenCode Go rows use the [Go-specific official price table](https://opencode.ai/docs/go/), including Qwen/Grok/Luna context thresholds. Zen and Ollama have different tariffs and are not aliases for Go. Go DeepSeek peak hours are weekdays 01:00–04:00 and 06:00–10:00 UTC; Ollama retains its own 12:00–18:00 UTC schedule.
 
 The [DeepSeek release announcement](https://api-docs.deepseek.com/news/news260910) sets the new Flash tariff's start to 2026-09-10 04:00 UTC. `deepseek-flash`, `deepseek-v4-flash`, and `deepseek-v4-flash-vision-exp` use $0.15 input, $0.003 cached input, and $0.60 output per million tokens off-peak; peak doubles all three. Earlier unpriced calls stay unknown because their historical tariff is not verified here. The direct DeepSeek API redirects V4 Pro to Flash from 2026-09-14 04:00 UTC. Go's post-transition Pro tariff is not yet confirmed, so those future calls stay unpriced until Go confirms it. No automatic Flash substitution is applied to Ollama. Go's monthly model limits differ, even across the Flash aliases; this module values tokens and does not merge or infer those quota capacities.
 
@@ -342,7 +339,7 @@ Two limits are stated rather than papered over. Devin's suffix collapsing happen
 
 The `devin` and `devin-cli` routes price the exact model `swe-2` at its published list rates: $3 input, $15 output and $0.30 cached input per million tokens ([Devin models](https://docs.devin.ai/desktop/models), checked 2026-09-15). This matches OCX's list-price comparison. Free self-serve periods and enterprise discounts do not turn the reference amount into an invoice or a zero token price. Cache reads are included in input and are subtracted before pricing uncached input. Cache-write pricing is unconfirmed, so positive writes stay unpriced; unreported tokens, unknown models and unsupported service tiers also stay unknown. Other providers cannot inherit this model's price.
 
-The flat part of the Devin table lives in `src/provider-prices.mjs` and is transcribed from the installed OpenCodex 2.56.0 overlay, so those rows read `ocx-provided` with check date 2026-09-13 rather than `official`. `gemini-3-8-flash` is the exception below: it was read from the provider's page and carries its own later date. Effort suffixes collapse to the base ID, and the collapsed ID is what the evidence is keyed on, so `kimi-k3-high` keeps the same provenance as `kimi-k3` instead of degrading to an anonymous catalog row. They are provider-scoped on purpose: a reselling surface charges its own rate for a model it forwards, and Devin's `grok-4-6` publishes $0.30 cached input where xAI's own `grok-4.6` publishes $0.50. A model ID alone therefore cannot select one of these rows. `kimi-k3` is the only currently supported Devin model this transcribed table newly prices (`gemini-3-8-flash` below is the other newly priced Devin model, from the provider's own page); the remaining rows cover models listed in the OpenCodex configuration but disabled today, so they do not appear in the price list until they are used again.
+The flat part of the Devin table lives in `internal/store/price_rules.json` and is transcribed from the installed OpenCodex 2.56.0 overlay, so those rows read `ocx-provided` with check date 2026-09-13 rather than `official`. `gemini-3-8-flash` is the exception below: it was read from the provider's page and carries its own later date. Effort suffixes collapse to the base ID, and the collapsed ID is what the evidence is keyed on, so `kimi-k3-high` keeps the same provenance as `kimi-k3` instead of degrading to an anonymous catalog row. They are provider-scoped on purpose: a reselling surface charges its own rate for a model it forwards, and Devin's `grok-4-6` publishes $0.30 cached input where xAI's own `grok-4.6` publishes $0.50. A model ID alone therefore cannot select one of these rows. `kimi-k3` is the only currently supported Devin model this transcribed table newly prices (`gemini-3-8-flash` below is the other newly priced Devin model, from the provider's own page); the remaining rows cover models listed in the OpenCodex configuration but disabled today, so they do not appear in the price list until they are used again.
 
 Cache writes stay `null` across the Devin rows added here and are reported in `unsupported`. The pre-existing `swe-2` row also publishes no cache write and refuses positive cache-write tokens, but it predates that field and reports an empty `unsupported`. This repository read no cache-write rate from the Devin page on 2026-09-15 while the 2.56.0 overlay carries one for some rows; rather than reconcile that disagreement into a number, positive cache writes stay unpriced. Publishing `0` would claim the write is free, and copying the upstream vendor's write rate would price a Devin call with another provider's number.
 
@@ -399,3 +396,24 @@ The server main thread reads only its last published snapshot in memory. A backg
 Fallback OpenAI management refresh covers every native/pool account, OAuth providers every stored account, and API-key providers the per-key quota API. Anthropic quota normally refreshes every two minutes. A failed request, missing account or unavailable account backs off forced retries for two, four, then at most eight minutes; a healthy sibling does not bypass this delay. A complete successful lookup restores the two-minute cadence. Newer valid account observations can replace an older failed lookup while retries wait. The web reads the monitor every 10 seconds. During a quota refresh, the last completed result stays available until the next result is ready. New configured providers are discovered on each collection. Ollama retains its dedicated probe for model counters. A legacy bare key is matched to OpenCodex's exact key-ID projection, without publishing a key fingerprint. Normalized measurements are persisted in the monitor DB so API-key quotas survive a restart. Failed, missing, expired, or reauth-required responses never acquire a fresh observation timestamp. A transient lookup failure preserves recent measured values and their calculations. Account `status` and window `stale` describe measurement eligibility; optional `account.refresh` separately reports `status` (`ok` or `delayed`), `lastAttemptAt` and `nextAttemptAt` (nullable ISO timestamps). The next-attempt time is a schedule, not a guaranteed completion time. The management response does not expose the upstream error reason, so the dashboard reports lookup delay without claiming every failure is rate limiting. Values older than 15 minutes, future-dated values, elapsed reset windows, paused accounts and reauthentication requirements remain excluded from current calculations. Repeated cache reads never add new observation timestamps or manufactured idle history.
 
 Dashboard account need uses recorded quota consumption and its weekly/monthly period, independently of API-dollar valuation. Legacy dollar-based API estimates retain their pricing rules.
+
+## Editing prices
+
+Both tables are plain JSON embedded into the binary at build time; edit them directly and rebuild.
+
+`internal/store/price_rules.json` holds one row per selector: `provider`, `model`, `peak`,
+`inputFrom` (the prompt-size threshold in tokens where a long-context rate starts) and `tier`
+(`default`, `priority` or `flex`). `quote` carries the rates in USD per million tokens (`input`,
+`output`, `cacheRead`, `cacheWrite`, `null` when unpublished), `status` (`official`,
+`ocx-provided`, `local-catalog` or `unpriced`), `sourceUrl`, `checkedAt`, and an optional
+`effectiveFrom` / `effectiveTo` for dated tariffs. A call is priced from the row whose selector
+matches it at the call's own time.
+
+`internal/runtime/subscription_catalog.json` holds monthly fees: `overrides` per provider (applies
+to every account of that provider) and `plans` per provider and plan name. A plan whose price
+cannot be told apart uses `monthlyUsd: null` with `basis: "ambiguous"`.
+
+`go test ./internal/store ./internal/runtime` rejects duplicate selectors, unknown tiers or
+statuses, negative rates, priced rows without input and output rates, and malformed dates. Stored
+amounts are not recalculated automatically: to re-price history for a changed model, bump
+`TariffRevision` and add the model to `repricedModels` in `internal/store/tariff_revision.go`.
