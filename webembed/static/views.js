@@ -1181,15 +1181,21 @@ function bucketChart(series, order, colour, names, spanLabel) {
             if (!b)
                 return { summary: [], columns: [], rows: [], notes: [] };
             const share = (x) => b.apiUsd > 0 ? `${percent.format(x / b.apiUsd * 100)}%` : '';
-            const models = Object.entries(b.byModel).sort((x, y) => y[1] - x[1]).slice(0, 3);
+            const sorted = Object.entries(b.byModel).sort((x, y) => y[1] - x[1]);
+            const modelRows = sorted.slice(0, 6), rest = sorted.slice(6);
             return {
                 summary: [money(b.apiUsd), `${count.format(b.requests)}회`, ...(b.tokens ? [`${tokens(b.tokens)} 토큰`] : [])],
                 columns: ['환산액', '비중'],
-                rows: Object.entries(b.byProvider).sort((x, y) => y[1] - x[1]).slice(0, 5)
-                    .map(([id, amount]) => ({ id, name: names.get(id) ?? id, values: [money(amount), share(amount)] })),
+                // One row per model; the swatch is the provider's colour so a model
+                // still reads against the stacked bar above it.
+                rows: modelRows.map(([key, amount]) => {
+                    const cut = key.indexOf('/');
+                    const provider = cut > 0 ? key.slice(0, cut) : key;
+                    return { id: provider, name: cut > 0 ? key.slice(cut + 1) : key, values: [money(amount), share(amount)] };
+                }),
                 notes: [
                     ...(b.trailingUsd !== null ? [`직전 ${spanWord} 합계 ${money(b.trailingUsd)}${b.trailingComplete ? '' : ' (기록이 기간보다 짧음)'}`] : []),
-                    ...(models.length ? ['상위 모델 · ' + models.map(([m, a]) => `${m.split('/').slice(1).join('/') || m} ${money(a)}`).join(' · ')] : []),
+                    ...(rest.length ? [`그 외 ${count.format(rest.length)}개 모델 ${money(rest.reduce((s, [, a]) => s + a, 0))}`] : []),
                     ...(b.unpricedRequests ? [`단가 미확인 ${count.format(b.unpricedRequests)}회 제외`] : []),
                 ],
                 ...(b.requests ? {} : { empty: '이 구간에는 호출 기록이 없습니다.' }),
