@@ -1,6 +1,6 @@
 # Quota Manager for OCX
 
-The service runs as a single Go binary with an embedded TypeScript UI (`cmd/quota-manager`, `internal/`, `web/src`). The Node sources under `src/` and `public/*.js` are the pre-port implementation, kept as the pinned baseline for `npm run check:port:integrate`; they are not deployed.
+The service runs as a single Go binary with an embedded TypeScript UI (`cmd/quota-manager`, `internal/`, `web/src`). The Node sources under `src/` and `public/*.js` are the pre-port implementation; they are not deployed.
 
 Read-only quota manager for [OpenCodex (OCX)](https://github.com/lidge-jun/opencodex): the remaining quota of every OpenCodex provider and account, what each of them has used, and the API-equivalent unit price behind those numbers, in one place. It only reads — it never switches accounts, changes a plan, or calls inference. Uses macOS system typography, grouped rows, and the device's light/dark preference. The native macOS menu-bar client in `macos/` consumes the same JSON API.
 
@@ -106,14 +106,6 @@ npm run typecheck
 npm run build:web
 npm run check:port:ui
 ```
-
-The integration gate compares the built binary with the pinned pre-port Node baseline (commit `cbaf12cca3a6ae8f70de37c47f22757381c47a49`, extracted read-only via `git archive`, never candidate HEAD). Both sides ingest the same fixed 10,000-row synthetic log and produce analytics on fresh SQLite directories (construction/store open excluded); CPU, DB write volume, and request counts are judged fail-closed, so a null or unmeasured metric fails the run. The DB handoff test walks Node writer → production binary ingest → Node writer → binary reopen on one SQLite file and usage log. Run it with:
-
-```sh
-npm run check:port:integrate
-```
-
-A missing pinned baseline, an unrun required item, or a bar miss is a failed exit; an honest performance miss is reported as a miss, never a lowered bar. Evidence lands in `dist/port-integrate-evidence.json` with the final assertion count and judgment set.
 
 Set `QUOTA_HOST` to your Tailscale IPv4 and `QUOTA_PORT` to an unused port for private remote access. `OPENCODEX_HOME` defaults to `~/.opencodex`; `QUOTA_CODEX_HOME` defaults to `CODEX_HOME`, then `~/.codex`. Do not expose the service publicly: it trusts tailnet network access and masks account emails, with no application login. Host/Origin guards are browser defenses, not user authentication.
 

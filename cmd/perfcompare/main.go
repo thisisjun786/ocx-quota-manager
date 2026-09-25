@@ -141,7 +141,7 @@ func measure(bar Bar) Report {
 		MissHidden:     false,
 		Notes: []string{
 			"AllocBytes is Go heap, not process RSS. rssKb is /proc/self/status VmRSS.",
-			"This isolated helper has no Node baseline. npm run check:port:integrate owns the 15% idle-RSS bar.",
+			"This isolated helper has no Node baseline.",
 			"HTTP GETs must not increase collect transport calls",
 		},
 	}

@@ -6,10 +6,8 @@ import (
 	"time"
 )
 
-// TestRoundTripOldNewOldNew is the in-process Go Open loop only.
-// Node writer → Go write → Node reopen → Go reopen lives in
-// scripts/check-port-integrate.mjs (JUN-272). Passing this test is not
-// that path and must not be recorded as bidirectional rollback evidence.
+// TestRoundTripOldNewOldNew is the in-process Go Open loop only; it is not
+// evidence that a Node writer and the Go binary can share one database.
 func TestRoundTripOldNewOldNew(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixMilli()
