@@ -1,0 +1,32 @@
+[Unit]
+Description=OpenCodex Quota Monitor
+After=network-online.target
+
+# Template for scripts/install.sh, which fills in the release path and any
+# --host/--port/--public-origin/--env options. %h is the user's home directory.
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/quota-monitor/releases/current
+ExecStart=%h/.local/share/quota-monitor/releases/current/quota-manager
+Environment=QUOTA_OPENCODEX_ORIGIN=http://127.0.0.1:10104
+Environment=QUOTA_HOST=127.0.0.1
+# Set when a reverse proxy (for example Tailscale Serve) exposes the UI:
+# Environment=QUOTA_PUBLIC_ORIGIN=https://your-host.your-tailnet.ts.net:10105
+Environment=QUOTA_DATA_DIR=%h/.local/state/quota-monitor
+Environment=QUOTA_PORT=8787
+Environment=QUOTA_DIRECT_PROVIDERS=openai,anthropic,cursor,xai,command-code,opencode-go,devin,kimi
+Environment=OPENCODEX_HOME=%h/.opencodex
+Environment=QUOTA_CODEX_HOME=%h/.codex
+# Claude cache writes default to the 5-minute rate. For 1-hour writes set both:
+# Environment=QUOTA_CLAUDE_CACHE_TTL=1h
+# Environment=QUOTA_CLAUDE_CACHE_FROM=2026-01-01T00:00:00Z
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

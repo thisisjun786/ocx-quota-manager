@@ -1,0 +1,9 @@
+{
+  "comment": "Locked in JUN-259. Do not retune after measuring.",
+  "repeats": 7,
+  "dropWorst": 2,
+  "idleRssOrCollectWallImprovePct": 15,
+  "otherImprovePct": 5,
+  "noExtraExternalRequests": true,
+  "missIsNotHide": true
+}

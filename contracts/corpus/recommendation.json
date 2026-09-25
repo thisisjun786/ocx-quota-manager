@@ -1,0 +1,27 @@
+{
+  "comment": "Independent arithmetic. Not copied from Node output.",
+  "formula": "needed = ceil(stable(sumPp/100 * capacityHours / periodHours)); weekly=168; monthly=720",
+  "cases": [
+    {
+      "id": "24h-100pp-weekly",
+      "sumPp": 100,
+      "capacityHours": 168,
+      "periodHours": 24,
+      "needed": 7
+    },
+    {
+      "id": "24h-100pp-monthly",
+      "sumPp": 100,
+      "capacityHours": 720,
+      "periodHours": 24,
+      "needed": 30
+    },
+    {
+      "id": "5h-gap-not-split-into-1h",
+      "comment": "A 5h unobserved gap must not be allocated into a 1h selected period.",
+      "selectedPeriodHours": 1,
+      "gapHours": 5,
+      "allocateGapIntoSelected": false
+    }
+  ]
+}

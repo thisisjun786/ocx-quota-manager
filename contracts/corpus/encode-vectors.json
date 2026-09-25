@@ -1,0 +1,30 @@
+{
+  "comment": "Stable serialization vectors. Hash input is always an array so JS key order and Go map order cannot diverge. Go must disable HTML escaping.",
+  "vectors": [
+    {
+      "id": "evidence-basic",
+      "array": ["openai", "gpt-5.4", "official", "https://developers.openai.com/api/docs/pricing", "2026-09-10", "2026-09-01", null, [5, 15, 0.5, null], 1, ["cache-read"], [], null, "catalog"],
+      "sha256": "expected-by-runtime"
+    },
+    {
+      "id": "nul-separator",
+      "array": ["openai", "acc\u0000ount"],
+      "comment": "NUL inside an account fragment must survive encoding."
+    },
+    {
+      "id": "unicode",
+      "array": ["xai", "한글계정", "emoji-🙂"],
+      "comment": "UTF-8, no \\u escaping of non-ASCII."
+    },
+    {
+      "id": "html-chars",
+      "array": ["<script>", "a&b", "x>y"],
+      "comment": "Must not become \\u003c / \\u0026 / \\u003e."
+    },
+    {
+      "id": "integer-boundary",
+      "array": [0, -0, 9007199254740991, 1.5],
+      "comment": "JS safe integer max; 0 is zero not null."
+    }
+  ]
+}

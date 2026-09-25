@@ -1,0 +1,58 @@
+{
+  "comment": "Inbound HTTP contract. Snapshot handlers must not open DB, files, credentials or the network.",
+  "bind": {
+    "allow": ["127.0.0.1", "100.64.0.1", "100.127.255.254"],
+    "deny": ["0.0.0.0", "::", "100.1.2.3", "100.99.999.1", "8.8.8.8", "192.168.1.1"]
+  },
+  "publicOrigin": {
+    "allow": [
+      { "host": "127.0.0.1", "origin": "https://quota.example.ts.net:10105" }
+    ],
+    "deny": [
+      { "host": "127.0.0.1", "origin": "http://quota.example.ts.net" },
+      { "host": "127.0.0.1", "origin": "https://evil.example" },
+      { "host": "127.0.0.1", "origin": "https://quota.example.ts.net/path" },
+      { "host": "100.97.43.12", "origin": "https://quota.example.ts.net:10105" }
+    ]
+  },
+  "requests": {
+    "allow": [
+      { "method": "GET", "path": "/healthz", "status": 200 },
+      { "method": "GET", "path": "/api/v1/snapshot", "status": 200 },
+      { "method": "GET", "path": "/", "status": 200 },
+      { "method": "GET", "path": "/app.js", "status": 200 }
+    ],
+    "deny": [
+      { "method": "POST", "path": "/api/v1/snapshot", "status": 405 },
+      { "method": "GET", "path": "/api/v1/snapshot", "origin": "https://evil.example", "status": 403 },
+      { "method": "GET", "path": "/api/v1/snapshot", "secFetchSite": "cross-site", "status": 403 },
+      { "method": "GET", "path": "/api/v1/snapshot", "host": "evil.example", "status": 403 },
+      { "method": "GET", "path": "/api/v1/snapshot", "host": "evil.example", "forwardedHost": "quota.example.ts.net:10105", "status": 403 },
+      { "method": "GET", "path": "/config.json", "status": 404 },
+      { "method": "GET", "path": "/.env", "status": 404 },
+      { "method": "GET", "path": "/../auth.json", "status": 404 },
+      { "method": "GET", "path": "/%2e%2e/auth.json", "status": 404 },
+      { "method": "GET", "path": "/api/providers", "status": 404 }
+    ]
+  },
+  "snapshotPath": {
+    "rule": "Serve the last fully projected public DTO only. Request path must not query SQLite, read credential files, wait on collection, or call providers.",
+    "states": {
+      "initial": { "analytics.status": "collecting", "usageStale": true, "hasWarning": true },
+      "lastGood": { "keepObservedAt": true, "keepProviders": true },
+      "collectError": { "analytics.status": "error", "usageStale": true, "warning": "수집 작업이 중단되어 마지막 기록을 표시합니다." },
+      "staleAge": "intervalMs * 3 or 30s, whichever is larger"
+    }
+  },
+  "headers": {
+    "required": [
+      "X-Content-Type-Options: nosniff",
+      "Referrer-Policy: no-referrer",
+      "X-Frame-Options: DENY",
+      "Cache-Control: no-store",
+      "Cross-Origin-Resource-Policy: same-origin"
+    ],
+    "cspMustInclude": "frame-ancestors 'none'"
+  },
+  "timeoutsMs": { "request": 10000, "headers": 10000, "keepAlive": 5000 }
+}

@@ -1,0 +1,12 @@
+# User unit; install in ~/.config/systemd/user.
+[Unit]
+Description=Daily Quota Manager history backup
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=quota-history-backup.service
+
+[Install]
+WantedBy=timers.target

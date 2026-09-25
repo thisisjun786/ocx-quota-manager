@@ -1,0 +1,184 @@
+{
+  "overrides": {
+    "anthropic": {
+      "monthlyUsd": 200,
+      "label": "Claude Max",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    },
+    "cursor": {
+      "monthlyUsd": 200,
+      "label": "Cursor Ultra",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    },
+    "ollama-cloud": {
+      "monthlyUsd": 100,
+      "label": "Ollama Cloud Max (구버전)",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    },
+    "openai": {
+      "monthlyUsd": 200,
+      "label": "ChatGPT Pro",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    },
+    "opencode-go": {
+      "monthlyUsd": 10,
+      "label": "OpenCode Go",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    },
+    "xai": {
+      "monthlyUsd": 300,
+      "label": "Grok",
+      "basis": "user-confirmed",
+      "sourceUrl": null,
+      "checkedAt": "2026-09-10",
+      "reason": "사용자가 확인한 월 구독료 기준"
+    }
+  },
+  "plans": {
+    "anthropic": {
+      "pro": {
+        "monthlyUsd": 20,
+        "label": "Claude Pro",
+        "basis": "official",
+        "sourceUrl": "https://support.claude.com/en/articles/11049741-what-is-the-max-plan",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "default_claude_max_5x": {
+        "monthlyUsd": 100,
+        "label": "Claude Max 5x",
+        "basis": "official",
+        "sourceUrl": "https://support.claude.com/en/articles/11049741-what-is-the-max-plan",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "default_claude_max_20x": {
+        "monthlyUsd": 200,
+        "label": "Claude Max 20x",
+        "basis": "official",
+        "sourceUrl": "https://support.claude.com/en/articles/11049741-what-is-the-max-plan",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "max-5x": {
+        "monthlyUsd": 100,
+        "label": "Claude Max 5x",
+        "basis": "official",
+        "sourceUrl": "https://support.claude.com/en/articles/11049741-what-is-the-max-plan",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "max-20x": {
+        "monthlyUsd": 200,
+        "label": "Claude Max 20x",
+        "basis": "official",
+        "sourceUrl": "https://support.claude.com/en/articles/11049741-what-is-the-max-plan",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      }
+    },
+    "cursor": {
+      "pro": {
+        "monthlyUsd": 20,
+        "label": "Cursor Pro",
+        "basis": "official",
+        "sourceUrl": "https://cursor.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "pro+": {
+        "monthlyUsd": 60,
+        "label": "Cursor Pro+",
+        "basis": "official",
+        "sourceUrl": "https://cursor.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "ultra": {
+        "monthlyUsd": 200,
+        "label": "Cursor Ultra",
+        "basis": "official",
+        "sourceUrl": "https://cursor.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      }
+    },
+    "ollama-cloud": {
+      "pro": {
+        "monthlyUsd": 20,
+        "label": "Ollama Pro",
+        "basis": "official",
+        "sourceUrl": "https://ollama.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "max": {
+        "monthlyUsd": 100,
+        "label": "Ollama Max",
+        "basis": "official",
+        "sourceUrl": "https://ollama.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "team": {
+        "monthlyUsd": 500,
+        "label": "Ollama Team",
+        "basis": "official",
+        "sourceUrl": "https://ollama.com/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      }
+    },
+    "openai": {
+      "plus": {
+        "monthlyUsd": 20,
+        "label": "ChatGPT Plus",
+        "basis": "official",
+        "sourceUrl": "https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "pro": {
+        "monthlyUsd": null,
+        "label": "ChatGPT Pro ($100 / $200)",
+        "basis": "ambiguous",
+        "sourceUrl": "https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro",
+        "reason": "Pro는 $100·$200 두 등급입니다. 저장된 pro만으로는 구분할 수 없습니다."
+      },
+      "pro_5x": {
+        "monthlyUsd": 100,
+        "label": "ChatGPT Pro 5x",
+        "basis": "official",
+        "sourceUrl": "https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "pro_20x": {
+        "monthlyUsd": 200,
+        "label": "ChatGPT Pro 20x",
+        "basis": "official",
+        "sourceUrl": "https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      }
+    },
+    "opencode-go": {},
+    "xai": {
+      "supergrok": {
+        "monthlyUsd": 30,
+        "label": "SuperGrok",
+        "basis": "official",
+        "sourceUrl": "https://x.ai/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      },
+      "supergrok-plus": {
+        "monthlyUsd": 100,
+        "label": "SuperGrok Plus",
+        "basis": "official",
+        "sourceUrl": "https://x.ai/pricing",
+        "reason": "웹 월간 정가 · 세금·할인·연간 결제 제외"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+# User unit: install under ~/.config/systemd/user only.
+[Unit]
+Description=Collect Kimi quota through OCX credential owner
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/share/quota-monitor/tools/kimi-collect.py
+TimeoutStartSec=35
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077

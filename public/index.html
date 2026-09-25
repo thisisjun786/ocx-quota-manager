@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="OCX의 제공자·계정별 남은 한도, 사용현황, 모델별 API 환산 단가를 한곳에서 확인합니다">
+  <title>쿼타 매니저 for OCX</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 이동</a>
+  <div class="mobile-topbar" id="mobile-topbar">
+    <button id="menu-toggle" class="menu-toggle" aria-label="탐색 열기" aria-expanded="false" aria-controls="sidebar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <span class="app-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 17V11M12 17V5M19 17V8"/></svg></span>
+    <strong>Quota Manager</strong>
+  </div>
+  <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+  <div class="app">
+    <aside id="sidebar" class="sidebar" aria-label="탐색">
+      <div class="drawer-head">
+        <div class="brand">
+          <span class="app-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 17V11M12 17V5M19 17V8"/></svg></span>
+          <div><strong>Quota Manager</strong><small>for OCX</small></div>
+        </div>
+        <button id="drawer-close" class="drawer-close" aria-label="탐색 닫기">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <nav aria-label="프로바이더" id="providers"><button class="nav-item active" data-provider="overview" aria-current="page">요약</button></nav>
+      <details id="provider-order" class="method order-editor">
+        <summary>순서 편집</summary>
+        <div id="provider-order-list"></div>
+        <p id="provider-order-note" class="sub-note" role="status"></p>
+      </details>
+    </aside>
+    <main id="main">
+      <div class="main-inner">
+      <div class="page-head">
+        <div><h1 id="title" tabindex="-1">요약</h1><p class="page-sub"><span id="auto-refresh" aria-live="off">자동 갱신 · 10초</span></p></div>
+        <div class="page-head-actions"><button id="refresh" class="refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.7-1L20 9M4 15l2.2 3A7 7 0 0 0 18 17"/></svg><span>새로고침</span></button></div>
+      </div>
+      <div class="toolbar">
+        <h2>사용 현황</h2>
+        <div id="period-picker" class="period-picker" role="group" aria-label="사용량 기간 · 마지막으로 사용 기록을 읽은 시각에서 거꾸로 센 구간"></div>
+        <label class="search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="search" type="search" placeholder="계정 검색" aria-label="계정 검색"></label>
+      </div>
+      <div id="notice" role="status" hidden></div>
+      <div id="content"><div class="loading" role="status">사용량을 불러오는 중…<div></div><div></div><div></div></div></div>
+      <footer><p id="usage-caveat" class="usage-caveat">API 환산액은 실제 청구액이 아니며, 캐시 사용량은 추정될 수 있고 가격 미확인 사용은 합계에서 제외됩니다.</p><span id="updated">첫 조회 대기 중</span><span>USD · API 환산 추정액</span><section id="efficiency" aria-label="계산 기준"></section></footer>
+      <noscript>사용량을 보려면 JavaScript를 켜 주세요.</noscript>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# User unit: install under ~/.config/systemd/user only.
+[Unit]
+Description=Keep Kimi quota collection current
+
+[Timer]
+OnStartupSec=30
+OnUnitActiveSec=5min
+AccuracySec=10s
+Unit=quota-kimi-collect.service
+
+[Install]
+WantedBy=timers.target

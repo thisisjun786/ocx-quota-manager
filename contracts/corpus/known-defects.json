@@ -1,0 +1,12 @@
+{
+  "comment": "Expected failures owned by existing issues. Never use as a passing golden.",
+  "defects": [
+    { "id": "JUN-226", "topic": "secret leakage in price evidence / missing-provider responses" },
+    { "id": "JUN-228", "topic": "binding-key collision can pick another account token" },
+    { "id": "JUN-229", "topic": "custom window id rename / collision loses history" },
+    { "id": "JUN-230", "topic": "Codex windows not classified by response duration" },
+    { "id": "JUN-231", "topic": "Cursor omitted 0 usage vs unobserved" },
+    { "id": "JUN-232", "topic": "Ollama bad response vs empty observation" },
+    { "id": "JUN-235", "topic": "unobserved / partial coverage vs true 0" }
+  ]
+}

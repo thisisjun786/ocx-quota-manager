@@ -1,0 +1,12 @@
+.env
+node_modules/
+/quota-monitor
+/dist/
+/web/dist/
+coverage/
+evidence/
+.codexclaw/
+.omo/
+.agents/
+.codex/
+devlog/

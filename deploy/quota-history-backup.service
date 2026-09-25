@@ -1,0 +1,11 @@
+# User unit; install in ~/.config/systemd/user. The script is installed from deploy/backup-history.py to ~/.local/share/quota-monitor/tools so a worktree can be removed without stopping backups.
+[Unit]
+Description=Verified online Quota Manager history backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/share/quota-monitor/tools/backup-history.py --source %h/.local/state/quota-monitor/history.sqlite --directory %h/.local/state/quota-monitor-backups/daily --keep 7
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
