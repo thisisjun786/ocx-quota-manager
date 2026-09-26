@@ -200,6 +200,17 @@ main { min-width: 0; align-self: start; }
 .quota-values { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-5); }
 .quota-values .metric > strong { font-size: var(--text-body); }
 .stale .quota-values { color: var(--muted); }
+.capacity-block { display: grid; gap: var(--space-2); min-width: 0; }
+.capacity-cycles { display: grid; gap: var(--space-1); min-width: 0; }
+.cycle-note { margin: 0; color: var(--muted); font-size: var(--text-label); overflow-wrap: anywhere; word-break: keep-all; }
+.cycle-note.shift { color: var(--text, inherit); }
+.cycle-details > summary { cursor: pointer; color: var(--muted); font-size: var(--text-label); width: fit-content; }
+.cycle-table { width: 100%; max-width: 440px; margin-top: var(--space-2); border-collapse: collapse; font-size: var(--text-label); font-variant-numeric: tabular-nums; }
+.cycle-table th { color: var(--muted); font-weight: var(--weight-medium); text-align: left; padding: 0 var(--space-3) var(--space-1) 0; white-space: nowrap; }
+.cycle-table td { padding: 2px var(--space-3) 2px 0; color: var(--muted); white-space: nowrap; }
+.cycle-table td:nth-child(2), .cycle-table th:nth-child(2), .cycle-table td:nth-child(3), .cycle-table th:nth-child(3) { text-align: right; }
+.cycle-table tr.selected td { color: inherit; }
+.cycle-more { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--text-label); word-break: keep-all; }
 .method { font-size: var(--text-label); color: var(--muted); line-height: var(--leading-relaxed); }
 .method summary { cursor: pointer; min-height: var(--control-md); align-content: center; list-style-position: inside; width: fit-content; border-radius: var(--radius-2xs); transition: color var(--motion-fast); }
 .method summary:hover { color: var(--text); }

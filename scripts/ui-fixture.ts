@@ -317,7 +317,13 @@ export function buildFixture(variantName = 'default') {
       // An integer-only reading and a fractional one side by side: 28 must not become 28.00,
       // and 12.34 must keep both places.
       quotaWindow('weekly', '주간', 28, { measurement: { precisionEvidence: 'integer_only',
-        reportedPercent: 28, calculatedPercent: 28, used: 280, limit: 1000 } }),
+        reportedPercent: 28, calculatedPercent: 28, used: 280, limit: 1000 },
+        // Four measured weekly cycles, the last two after a supply cut. The estimate uses the
+        // two cycles after the change and the note names both sides of it.
+        analytics: { capacityApiUsd: 120,
+          capacityCycles: [160, 170, 118, 122].map((apiUsd, i) => ({ from: at((i - 4) * 168 * HOUR), to: at((i - 3) * 168 * HOUR - HOUR),
+            resetAt: at((i - 3) * 168 * HOUR), apiUsd, deltaPp: 40, matchedDeltaPp: 40, matchedApiUsd: apiUsd * 0.4, usable: true, selected: i >= 2 })),
+          capacityShift: { at: at(-2 * 168 * HOUR), beforeApiUsd: 165, afterApiUsd: 120, changeRatio: 120 / 165 - 1 } } }),
       quotaWindow('five-hour', '5시간', 12.34, { resetAt: at(-60000),
         measurement: { reportedPercent: 12.34, calculatedPercent: 12.34, used: 123.4, limit: 1000 } }),
       // A second reading of the same account from a different endpoint and a different scope.

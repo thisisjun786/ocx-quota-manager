@@ -125,7 +125,7 @@ export function subscriptionNote(sub, ratio, basis) {
         (sub.basis === 'user-confirmed' ? ' · 사용자 확인' : '') +
         (finite(ratio) ? ` · 구독료 대비 최근 30일 환산액 약 ${number.format(ratio)}배${['partial', 'lower-bound'].includes(basis ?? '') ? ' (일부 사용)' : ''}` : '');
 }
-export function windowAnalyticsView(w) {
+export function windowAnalyticsView(w, key = w.id) {
     const a = winA(w);
     const prior = !finite(a.capacityApiUsd) ? a.historicalCapacity : null;
     const value = prior?.apiUsd ?? a.capacityApiUsd;
@@ -153,9 +153,56 @@ export function windowAnalyticsView(w) {
     const forecast = metric('소진 예상', eta, a.exhaustsAt && (w.remainingPercent ?? 0) > 0 && (a.forecastObservedHours ?? 0) < 24 ? '초기 추정' : null);
     forecast.title = a.exhaustsAt ? date.format(new Date(a.exhaustsAt)) : a.reason || '계산할 기록 없음';
     grid.append(forecast);
-    return grid;
+    const cycles = prior ? null : capacityCyclesView(a, `cycles:${key}`);
+    if (!cycles)
+        return grid;
+    const wrap = node('div', 'capacity-block');
+    wrap.append(grid, cycles);
+    return wrap;
 }
-export function windowView(account, w) {
+const shortDate = { format(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    } };
+const CYCLE_ROWS = 6;
+// One line under the limit; the per-cycle figures stay folded. A cycle's figure is its
+// spend divided by its quota movement: what 100% of the limit cost during that cycle.
+export function capacityCyclesView(a, expandKey) {
+    const cycles = (a.capacityCycles ?? []).filter(c => finite(c.apiUsd) && c.apiUsd > 0);
+    if (cycles.length < 2)
+        return null;
+    const wrap = node('div', 'capacity-cycles');
+    const shift = a.capacityShift;
+    const used = cycles.filter(c => c.selected).length;
+    const range = a.capacityRangeApiUsd;
+    const change = shift && finite(shift.changeRatio) ? ` (${shift.changeRatio > 0 ? '+' : '−'}${count.format(Math.abs(shift.changeRatio) * 100)}%)` : '';
+    wrap.append(node('p', shift ? 'cycle-note shift' : 'cycle-note', shift
+        ? `공급량 변경 감지 · ${shortDate.format(new Date(shift.at))}부터 ≈ ${usd(shift.beforeApiUsd)} → ≈ ${usd(shift.afterApiUsd)}${change}`
+        : `최근 ${count.format(used)}개 주기 평균${range ? ` · 주기마다 ${usd(range.low)}~${usd(range.high)}` : ''}`));
+    const details = node('details', 'cycle-details');
+    details.dataset.expand = expandKey;
+    details.append(node('summary', '', `주기별 한도 추산 ${count.format(cycles.length)}개`));
+    const table = node('table', 'cycle-table');
+    const head = node('tr');
+    for (const label of ['주기 끝', '100% 한도', '소모', ''])
+        head.append(node('th', '', label));
+    table.createTHead().append(head);
+    const body = table.createTBody();
+    const shiftAt = shift ? Date.parse(shift.at) : NaN;
+    const newest = [...cycles].reverse();
+    for (const c of newest.slice(0, CYCLE_ROWS)) {
+        const state = c.selected ? '추산에 사용' : !c.usable ? '소모 적어 제외' : finite(shiftAt) && Date.parse(c.to) < shiftAt ? '변경 전' : '이전 주기';
+        const row = node('tr', c.selected ? 'selected' : '');
+        row.append(node('td', '', shortDate.format(new Date(c.to))), node('td', '', usd(c.apiUsd)), node('td', '', `${quotaFigure(c.matchedDeltaPp ?? c.deltaPp)}%p`), node('td', '', state));
+        body.append(row);
+    }
+    details.append(table);
+    const more = newest.length > CYCLE_ROWS ? `이전 주기 ${count.format(newest.length - CYCLE_ROWS)}개 생략 · ` : '';
+    details.append(node('small', 'cycle-more', `${more}각 주기에 쓴 API 환산액을 그 주기의 쿼타 소모(%p)로 나눠 100% 한도를 계산했습니다.`));
+    wrap.append(details);
+    return wrap;
+}
+export function windowView(account, w, providerId = '') {
     const fresh = freshWindow(account, w);
     const valid = finite(w.remainingPercent) && w.remainingPercent >= 0 && w.remainingPercent <= 100;
     const item = node('div', `window${!fresh ? ' stale' : ''}${valid && (w.remainingPercent ?? 0) < 20 ? ' low' : ''}`);
@@ -185,7 +232,7 @@ export function windowView(account, w) {
             historicalCapacity: winA(w).historicalCapacity ?? null } };
     item.append(quota);
     if (!['paused', 'reauth', 'unavailable'].includes(account.status))
-        item.append(windowAnalyticsView(analytics));
+        item.append(windowAnalyticsView(analytics, `${providerId}:${account.id}:${w.id}`));
     return item;
 }
 export function accountView(provider, a, selectedPeriod, changePeriod) {
@@ -244,7 +291,7 @@ export function accountView(provider, a, selectedPeriod, changePeriod) {
     const primary = a.windows;
     if (primary.length) {
         const windows = node('div', 'windows');
-        primary.forEach(w => windows.append(windowView(a, w)));
+        primary.forEach(w => windows.append(windowView(a, w, provider.id)));
         article.append(windows);
     }
     else
