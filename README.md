@@ -10,6 +10,9 @@ prices, in one place. It only reads. It never switches accounts, changes a plan 
 - **Cost analysis**: API-equivalent spend by provider, model and account, in 1-hour, 5-hour or daily bars
 - **Quota analysis**: quota %p used per provider in the same bars, with the dollars behind each %p
 - **Model prices**: the rate behind every figure, with its source and check date
+- **Collection logs**: quota lookup attempts, success and HTTP 429 rates by provider,
+  account/result filters, and retry timing. These are quota reads, not model calls;
+  details are retained for 30 days from the time logging is enabled.
 
 It is a single Go binary with the web UI embedded, and a macOS menu-bar client in `macos/` that reads
 the same JSON API.

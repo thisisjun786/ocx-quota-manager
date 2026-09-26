@@ -474,6 +474,9 @@ func (h *History) Maintain(now int64) error {
 			"DELETE FROM identity_epochs WHERE endedAt IS NOT NULL AND endedAt<?",
 			"DELETE FROM ollama_observations WHERE at<?",
 		}
+		if _, err := tx.Exec("DELETE FROM collection_logs WHERE startedAt<?", now-30*86400000); err != nil {
+			return err
+		}
 		for _, s := range cutoffStmts {
 			if _, err := tx.Exec(s, cutoff); err != nil {
 				return err

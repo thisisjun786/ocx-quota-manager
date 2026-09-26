@@ -5,6 +5,7 @@ import {accountView, providerAnalytics, overviewView, topEfficiency, renderOrder
 import type { PeriodKey, QuotaProvider, UiContext } from './types.js';
 import { asPeriodKey, asRecord, str } from './types.js';
 import { validateSnapshot } from '../contract.js';
+import {collectionView} from './collection.js';
 
 function htmlEl(el: Element | EventTarget | null | undefined): HTMLElement | null {
   return el instanceof HTMLElement ? el : null;
@@ -35,6 +36,7 @@ const ctx: UiContext = {
   clearSearch: () => { requireEl<HTMLInputElement>('search').value = ''; render(); },
 };
 let busy = false;
+const collection = collectionView();
 let renderedMinute = 0;
 let nextRefreshAt = Date.now()+REFRESH_MS;
 try {
@@ -70,9 +72,11 @@ function setDrawer(open: boolean, {restoreFocus = true}: {restoreFocus?: boolean
 }
 function select(id: string) {
   ctx.selected = id;
+  if (id !== 'collection') collection.cancel();
   const hash = id === 'overview' ? '' : `#${encodeURIComponent(id)}`;
   if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
   render();
+  if (id === 'collection') void collection.refresh();
   if (DRAWER_QUERY.matches) {
     setDrawer(false, {restoreFocus:false});
     $('title').focus({preventScroll:true});
@@ -126,6 +130,7 @@ function render() {
     {id:'accounts', name:'계정 현황', ...(urgent ? {badge:String(urgent)} : {})},
     {id:'costs', name:'비용 분석'},
     {id:'quota', name:'쿼타 분석'},
+    {id:'collection', name:'수집 로그'},
     {id:'all', name:'전체 계정', accounts, section:'제공자'},
     ...all,
   ];
@@ -144,26 +149,30 @@ function render() {
   const accountsPage = ctx.selected === 'accounts';
   const costsPage = ctx.selected === 'costs';
   const quotaPage = ctx.selected === 'quota';
+  const collectionPage = ctx.selected === 'collection';
   $('title').textContent = overview ? '요약' : accountsPage ? '계정 현황' : costsPage ? '비용 분석' : quotaPage ? '쿼타 분석'
-    : ctx.selected === 'all' ? '전체 계정' : all.find(p => p.id === ctx.selected)?.name ?? '전체 계정';
+    : collectionPage ? '수집 로그' : ctx.selected === 'all' ? '전체 계정' : all.find(p => p.id === ctx.selected)?.name ?? '전체 계정';
   const search = requireEl<HTMLInputElement>('search');
   const searchLabel = search.closest('label');
-  if (searchLabel) searchLabel.hidden = overview || costsPage || quotaPage;
+  if (searchLabel) searchLabel.hidden = overview || costsPage || quotaPage || collectionPage;
   search.placeholder = '계정 검색';
   search.setAttribute('aria-label', '계정 검색');
   $('period-picker').hidden = !overview;
   const toolbarTitle = document.querySelector('.toolbar h2');
+  document.querySelector('.toolbar')?.toggleAttribute('hidden',collectionPage);
+  document.querySelector('footer')?.toggleAttribute('hidden',collectionPage);
   if (toolbarTitle) toolbarTitle.textContent = overview ? '사용 현황' : accountsPage ? '긴급도 순' : costsPage ? 'API 환산 비용' : quotaPage ? '한도 사용 흐름' : '계정별 사용 현황';
   for (const b of $('period-picker').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.period === ctx.selectedPeriod));
   topEfficiency(ctx);
   const query = requireEl<HTMLInputElement>('search').value.trim().toLowerCase();
   const content = $('content');
-  content.replaceChildren();
+  if (!(collectionPage && content.firstElementChild === collection.root)) content.replaceChildren();
   if (overview) content.append(overviewView(all, ctx));
   if (accountsPage) content.append(accountsView(ctx, query));
   if (costsPage) content.append(costsView(ctx));
   if (quotaPage) content.append(quotaView(ctx));
-  const special = overview || accountsPage || costsPage || quotaPage;
+  if (collectionPage) { collection.update(all); if (content.firstElementChild !== collection.root) content.append(collection.root); }
+  const special = overview || accountsPage || costsPage || quotaPage || collectionPage;
   let countGroups = 0;
   for (const p of all) {
     if (special) break;
@@ -219,6 +228,7 @@ async function refresh() {
   requireEl<HTMLButtonElement>('refresh').disabled = true;
   $('refresh').setAttribute('aria-label', '새로고침 중');
   try {
+    if (ctx.selected === 'collection') void collection.refresh();
     const r = await fetch('/api/v1/snapshot', {cache:'no-store', signal:AbortSignal.timeout(10000)});
     if (!r.ok) throw new Error('unavailable');
     const data = validateSnapshot(await r.json());
@@ -296,7 +306,7 @@ const initial = decodeURIComponent(location.hash.slice(1));
 if (initial) ctx.selected = initial;
 window.addEventListener('hashchange', () => {
   const id = decodeURIComponent(location.hash.slice(1)) || 'overview';
-  if (id !== ctx.selected) { ctx.selected = id; render(); }
+  if (id !== ctx.selected) select(id);
 });
 setDrawer(false, {restoreFocus:false});
 refresh();

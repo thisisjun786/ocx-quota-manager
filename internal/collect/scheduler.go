@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,8 @@ type Schedule struct {
 type Scheduler struct {
 	Clock     clock.Clock
 	Transport transport.Transport
+	OnAttempt func(Attempt) error
+	logErrors []error
 	Adapters  []Adapter
 	Limit     int
 	mu        sync.Mutex
@@ -41,9 +44,23 @@ type Scheduler struct {
 	restored  map[string]Outcome
 }
 
-// Outcome is the last direct read of one account endpoint: when it ran, how it
-// ended in the UI's status vocabulary, and when the next read is due.
+// Attempt records only non-secret metadata for one external call.
+type Attempt struct {
+	StartedAt     int64  `json:"startedAt"`
+	Provider      string `json:"provider"`
+	Account       string `json:"account"`
+	Endpoint      string `json:"endpoint"`
+	Result        string `json:"result"`
+	HTTPStatus    *int   `json:"httpStatus"`
+	DurationMs    int64  `json:"durationMs"`
+	RetryAfterMs  *int64 `json:"retryAfterMs"`
+	NextAttemptAt int64  `json:"nextAttemptAt"`
+	Failures      int    `json:"failures"`
+}
+
+// Outcome is the latest direct read per logical account endpoint.
 type Outcome struct {
+	CredentialIdentity string `json:"credentialIdentity,omitempty"`
 	Provider      string `json:"provider"`
 	Account       string `json:"account"`
 	Endpoint      string `json:"endpoint"`
@@ -54,13 +71,23 @@ type Outcome struct {
 	Failures      int    `json:"failures"`
 }
 
+func logical(key FlightKey) FlightKey { key.Identity = ""; return key }
+
+func (s *Scheduler) LogErrors() []error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	errs := s.logErrors
+	s.logErrors = nil
+	return errs
+}
+
 // Outcomes returns the latest outcome per endpoint for persistence and display.
 func (s *Scheduler) Outcomes() []Outcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Outcome, 0, len(s.outcome))
 	for key, o := range s.outcome {
-		if c, ok := s.cool[key]; ok {
+		if c, ok := s.cool[logical(key)]; ok {
 			o.NextAttemptAt = c.NotBefore.UnixMilli()
 			o.Failures = c.Failures
 		}
@@ -77,14 +104,20 @@ func (s *Scheduler) Restore(prior []Outcome) {
 	defer s.mu.Unlock()
 	s.restored = map[string]Outcome{}
 	for _, o := range prior {
-		s.restored[o.Provider+"\x00"+o.Account+"\x00"+o.Endpoint] = o
+		name := o.Provider + "\x00" + o.Account + "\x00" + o.Endpoint
+		if previous, exists := s.restored[name]; !exists || o.LastAttemptAt > previous.LastAttemptAt {
+			s.restored[name] = o
+		}
 	}
 }
 
 func (s *Scheduler) record(key FlightKey, status string, started int64, success bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	identity := key.Identity
+	key = logical(key)
 	o := s.outcome[key]
+	o.CredentialIdentity = identity
 	o.Provider, o.Account, o.Endpoint = key.Provider, key.Account, key.Endpoint
 	o.Status, o.LastAttemptAt = status, started
 	if success {
@@ -178,6 +211,7 @@ func (s *Scheduler) Collect(ctx context.Context, bindings []Binding, enabled []s
 func (s *Scheduler) applyRestored(key FlightKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key = logical(key)
 	name := key.Provider + "\x00" + key.Account + "\x00" + key.Endpoint
 	prior, ok := s.restored[name]
 	if !ok {
@@ -188,18 +222,24 @@ func (s *Scheduler) applyRestored(key FlightKey) {
 		return
 	}
 	s.outcome[key] = prior
-	if prior.NextAttemptAt > 0 && prior.Failures > 0 {
-		s.cool[key] = Schedule{NotBefore: time.UnixMilli(prior.NextAttemptAt), Failures: prior.Failures}
+	if prior.NextAttemptAt > 0 {
+		s.cool[logical(key)] = Schedule{NotBefore: time.UnixMilli(prior.NextAttemptAt), Failures: prior.Failures}
 	}
 }
 
 func (s *Scheduler) tryBegin(key FlightKey) bool {
+	identity := key.Identity
+	key = logical(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inflight[key] {
 		return false
 	}
-	if cool, ok := s.cool[key]; ok && s.Clock.Now().Before(cool.NotBefore) {
+	prior := s.outcome[key]
+	if prior.CredentialIdentity != "" && prior.CredentialIdentity != identity && (prior.Status == "unauthorized" || prior.Status == "access_denied") {
+		s.cool[key] = Schedule{NotBefore: time.UnixMilli(prior.LastAttemptAt).Add(pollInterval)}
+	}
+	if cool, ok := s.cool[logical(key)]; ok && s.Clock.Now().Before(cool.NotBefore) {
 		return false
 	}
 	s.inflight[key] = true
@@ -207,6 +247,7 @@ func (s *Scheduler) tryBegin(key FlightKey) bool {
 }
 
 func (s *Scheduler) end(key FlightKey) {
+	key = logical(key)
 	s.mu.Lock()
 	delete(s.inflight, key)
 	s.mu.Unlock()
@@ -218,14 +259,36 @@ func (s *Scheduler) fetch(ctx context.Context, b Binding, ad Adapter, key Flight
 	if !allowed {
 		return nil
 	}
+	attempt := Attempt{StartedAt: started, Provider: b.Provider, Account: b.AccountID, Endpoint: ad.EndpointID()}
+	defer func() {
+		attempt.DurationMs = nowMs(s.Clock.Now()) - started
+		if attempt.DurationMs < 0 {
+			attempt.DurationMs = 0
+		}
+		s.mu.Lock()
+		state := s.cool[logical(key)]
+		attempt.NextAttemptAt, attempt.Failures = state.NotBefore.UnixMilli(), state.Failures
+		s.mu.Unlock()
+		if s.OnAttempt != nil {
+			if err := s.OnAttempt(attempt); err != nil {
+				s.mu.Lock()
+				s.logErrors = append(s.logErrors, err)
+				s.mu.Unlock()
+			}
+		}
+	}()
 	// Hold the key for the base interval while the request runs; the outcome
 	// below replaces this with the real schedule.
 	s.mu.Lock()
-	failures := s.cool[key].Failures
-	s.cool[key] = Schedule{NotBefore: s.Clock.Now().Add(pollInterval), Failures: failures}
+	failures := s.cool[logical(key)].Failures
+	s.cool[logical(key)] = Schedule{NotBefore: s.Clock.Now().Add(pollInterval), Failures: failures}
 	s.mu.Unlock()
 	res, err := s.Transport.Do(ctx, req)
 	finished := nowMs(s.Clock.Now())
+	if err == nil {
+		attempt.HTTPStatus = &res.Status
+		_, attempt.RetryAfterMs = retryAfter(res, s.Clock.Now())
+	}
 	if err != nil {
 		s.backoff(key, failures+1, 0)
 		status := "network"
@@ -236,44 +299,55 @@ func (s *Scheduler) fetch(ctx context.Context, b Binding, ad Adapter, key Flight
 		} else if strings.Contains(err.Error(), "too large") {
 			status = "oversized"
 		}
+		attempt.Result = status
 		s.record(key, status, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowFailed, started, finished)
 	}
 	if b.Token != "" && strings.Contains(string(res.Body), b.Token) {
 		s.backoff(key, failures+1, 0)
-		s.record(key, "credential_echoed", started, false)
+		attempt.Result = "credential_echoed"
+		s.record(key, attempt.Result, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowInvalid, started, finished)
 	}
 	switch {
 	case res.Status == 429:
-		s.backoff(key, failures+1, retryAfter(res, pollInterval))
-		s.record(key, statusFor(res.Status), started, false)
+		wait, parsed := retryAfter(res, s.Clock.Now())
+		attempt.RetryAfterMs = parsed
+		s.backoff(key, failures+1, wait)
+		attempt.Result = statusFor(res.Status)
+		s.record(key, attempt.Result, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowFailed, started, finished)
 	case res.Status == 401 || res.Status == 403:
-		// The same credential will be refused again until it is replaced, and a
-		// replaced credential gets a new flight key.
+		// A replacement credential may recover after the normal cadence floor.
 		s.backoff(key, failures+1, authCooldown)
-		s.record(key, statusFor(res.Status), started, false)
+		attempt.Result = statusFor(res.Status)
+		s.record(key, attempt.Result, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowFailed, started, finished)
 	case res.Status < 200 || res.Status >= 300:
-		s.backoff(key, failures+1, 0)
-		s.record(key, statusFor(res.Status), started, false)
+		wait, _ := retryAfter(res, s.Clock.Now())
+		s.backoff(key, failures+1, wait)
+		attempt.Result = statusFor(res.Status)
+		s.record(key, attempt.Result, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowFailed, started, finished)
 	}
 	if b.Provider == "openai" {
 		var body map[string]any
 		_ = json.Unmarshal(res.Body, &body)
 		if id, ok := body["account_id"].(string); b.AccountRef != nil && (id != *b.AccountRef || !ok) {
-			s.record(key, "base_url_mismatch", started, false)
+			s.backoff(key, failures+1, 0)
+			attempt.Result = "base_url_mismatch"
+			s.record(key, attempt.Result, started, false)
 			return s.failedOrLastGood(b, ad, key, WindowInvalid, started, finished)
 		}
 	}
 	rows, err := ad.Parse(res.Body, finished)
 	if err != nil || len(rows) == 0 {
+		s.backoff(key, failures+1, 0)
 		status := "invalid_json"
 		if err == nil {
 			status = "observation_unavailable"
 		}
+		attempt.Result = status
 		s.record(key, status, started, false)
 		return s.failedOrLastGood(b, ad, key, WindowInvalid, started, finished)
 	}
@@ -294,7 +368,9 @@ func (s *Scheduler) fetch(ctx context.Context, b Binding, ad Adapter, key Flight
 			rows[i].RemainingPercent = remain(rows[i].UsedPercent)
 		}
 		if rows[i].Kind == WindowInvalid {
-			s.record(key, "invalid_json", started, false)
+			s.backoff(key, failures+1, 0)
+			attempt.Result = "invalid_json"
+			s.record(key, attempt.Result, started, false)
 			return s.failedOrLastGood(b, ad, key, WindowInvalid, started, finished)
 		}
 		if rows[i].Kind == WindowOK && rows[i].WindowID != "" {
@@ -303,14 +379,15 @@ func (s *Scheduler) fetch(ctx context.Context, b Binding, ad Adapter, key Flight
 	}
 	s.mu.Lock()
 	s.lastGood[key] = okOnly
-	s.cool[key] = Schedule{NotBefore: s.Clock.Now().Add(pollInterval)}
+	s.cool[logical(key)] = Schedule{NotBefore: s.Clock.Now().Add(pollInterval)}
 	s.mu.Unlock()
-	s.record(key, "ok", started, true)
+	attempt.Result = "ok"
+	s.record(key, attempt.Result, started, true)
 	return rows
 }
 
 const (
-	pollInterval = 120 * time.Second
+	pollInterval = 5 * time.Minute
 	maxBackoff   = 30 * time.Minute
 	authCooldown = 30 * time.Minute
 )
@@ -329,24 +406,29 @@ func (s *Scheduler) backoff(key FlightKey, failures int, floor time.Duration) {
 		wait = floor
 	}
 	s.mu.Lock()
-	s.cool[key] = Schedule{NotBefore: s.Clock.Now().Add(wait), Failures: failures}
+	s.cool[logical(key)] = Schedule{NotBefore: s.Clock.Now().Add(wait), Failures: failures}
 	s.mu.Unlock()
 }
 
-func retryAfter(res transport.Response, localMax time.Duration) time.Duration {
+func retryAfter(res transport.Response, now time.Time) (time.Duration, *int64) {
 	raw := ""
 	if res.Headers != nil {
-		raw = res.Headers.Get("Retry-After")
+		raw = strings.TrimSpace(res.Headers.Get("Retry-After"))
 	}
-	sec, err := strconv.Atoi(raw)
-	if err != nil || sec <= 0 {
-		return localMax
+	var wait time.Duration
+	if sec, err := strconv.ParseInt(raw, 10, 64); err == nil && sec > 0 && sec <= math.MaxInt64/int64(time.Second) {
+		wait = time.Duration(sec) * time.Second
+	} else if date, err := http.ParseTime(raw); err == nil && date.After(now) {
+		wait = date.Sub(now)
 	}
-	wait := time.Duration(sec) * time.Second
-	if wait < localMax {
-		return localMax
+	if wait == 0 {
+		return pollInterval, nil
 	}
-	return wait
+	ms := wait.Milliseconds()
+	if wait < pollInterval {
+		return pollInterval, &ms
+	}
+	return wait, &ms
 }
 
 func (s *Scheduler) LastGood(key FlightKey) []Reading {

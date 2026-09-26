@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/thisisjun786/ocx-quota-manager/internal/collect"
 	"github.com/thisisjun786/ocx-quota-manager/internal/httpserver"
+	"github.com/thisisjun786/ocx-quota-manager/internal/store"
 	"github.com/thisisjun786/ocx-quota-manager/webembed"
 )
 
@@ -21,6 +23,31 @@ func main() {
 	}
 	if _, err := os.Stat(path); err != nil {
 		log.Fatal("QUOTA_FIXTURE_SNAPSHOT: ", err)
+	}
+	dir, err := os.MkdirTemp("", "quota-collection-fixture-")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	hist, err := store.Open(dir, store.OpenOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer hist.Close()
+	if seed := os.Getenv("QUOTA_FIXTURE_COLLECTION_LOGS"); seed != "" {
+		body, err := os.ReadFile(seed)
+		if err != nil {
+			log.Fatal(err)
+		}
+		var attempts []collect.Attempt
+		if err := json.Unmarshal(body, &attempts); err != nil {
+			log.Fatal(err)
+		}
+		for _, attempt := range attempts {
+			if err := hist.InsertCollectionLog(attempt); err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 
 	public := webembed.FS()
@@ -36,7 +63,7 @@ func main() {
 
 	srv, err := httpserver.New(httpserver.Options{
 		Host: host, Port: port, PublicOrigin: os.Getenv("QUOTA_PUBLIC_ORIGIN"),
-		Public: public,
+		Public: public, CollectionLogs: hist.ListCollectionLogs,
 		SnapshotAny: func() any {
 			body, err := os.ReadFile(path)
 			if err != nil {

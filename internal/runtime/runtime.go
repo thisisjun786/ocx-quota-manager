@@ -44,6 +44,9 @@ func New(clk clock.Clock, st store.Store, tr transport.Transport) *Runtime {
 		tr = collect.NewHTTPSTransport()
 	}
 	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: 10 * time.Second, sched: collect.NewScheduler(clk, tr)}
+	if logs, ok := st.(interface{ InsertCollectionLog(collect.Attempt) error }); ok {
+		rt.sched.OnAttempt = logs.InsertCollectionLog
+	}
 	rt.publish(rt.bootSnapshot())
 	return rt
 }
@@ -159,8 +162,9 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	if len(rt.Direct) > 0 {
 		rows = rt.sched.Collect(ctx, local.Bindings, append(append([]string{}, rt.Direct...), "ollama-cloud"))
 	}
+	logErrors := rt.sched.LogErrors()
 	epochs, epochErr := rt.bindingEpochs(local.Bindings, now.UnixMilli())
-	storeFailed := epochErr != nil
+	storeFailed := epochErr != nil || len(logErrors) != 0
 	if rt.Store != nil {
 		for _, row := range rows {
 			if !persistable(row) {

@@ -36,6 +36,45 @@
   color: var(--text); background: var(--bg);
 }
 * { box-sizing: border-box; }
+.collection { display: grid; gap: var(--space-4); }
+.collection > div:last-child { display: grid; gap: var(--space-3); }
+.collection-meta { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.collection .collection-meta .sub-note { margin: 0; }
+.collection .collection-meta .sub-note:empty { display: none; }
+.collection > div > h2 { margin-top: var(--space-3); }
+.collection > div > h2:first-child { margin-top: 0; }
+.collection > div > h2 + .sub-note { margin-top: calc(-1 * var(--space-2)); }
+.collection-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.collection-phrase { white-space: nowrap; }
+.collection-filter { display: grid; gap: var(--space-1); font-size: var(--text-label); color: var(--muted); min-width: 0; }
+.collection-filter select { width: 100%; min-width: 0; min-height: var(--control-lg); max-width: 100%; padding: var(--space-2); color: var(--text); background: var(--surface); border: 1px solid var(--faint); border-radius: var(--radius-sm); }
+.collection .period-picker button, .collection .refresh { min-height: var(--control-lg); }
+.collection-filters .refresh { min-height: var(--control-lg); }
+.collection .refresh[aria-pressed="true"] { background: var(--accent-soft); font-weight: var(--weight-semibold); }
+.collection-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: var(--space-3); }
+.collection-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: var(--space-4); display: grid; gap: var(--space-2); }
+.collection-card .metric { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; }
+.collection-card .metric > span { color: var(--muted); font-size: var(--text-label); }
+.collection-card .metric > strong { font-family: var(--font-ui); }
+.collection-card .metric .num { font-family: var(--font-code); font-variant-numeric: tabular-nums; }
+/* 표는 자기 영역 안에서만 가로로 움직인다. 안쪽 그림자는 더 볼 열이 남았을 때만 보인다. */
+.collection-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); max-width: 100%; background: linear-gradient(to right, var(--surface) 30%, transparent), linear-gradient(to left, var(--surface) 30%, transparent), linear-gradient(to right, var(--accent-soft), transparent), linear-gradient(to left, var(--accent-soft), transparent); background-position: left, right, left, right; background-repeat: no-repeat; background-size: var(--space-12) 100%, var(--space-12) 100%, var(--space-6) 100%, var(--space-6) 100%; background-attachment: local, local, scroll, scroll; background-color: var(--surface); }
+.collection-table:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.collection table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--text-control); table-layout: fixed; min-width: calc(var(--space-16) * 10); }
+.collection col.time { width: 18%; } .collection col.target { width: 26%; } .collection col.result { width: 18%; } .collection col.next { width: 24%; } .collection col.duration { width: 14%; }
+.collection th { color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
+.collection th, .collection td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.collection tr:last-child td { border-bottom: 0; }
+.collection td { min-width: 0; }
+.collection td small { display: block; color: var(--muted); margin-top: var(--space-1); overflow-wrap: anywhere; }
+.collection-time, .collection-machine, .collection .num { font-family: var(--font-code); font-variant-numeric: tabular-nums; }
+.collection-time, .collection summary { white-space: nowrap; }
+.collection summary { cursor: pointer; display: list-item; }
+.collection details .sub-note { margin-top: var(--space-2); white-space: normal; word-break: keep-all; }
+.collection-paging { display: flex; gap: var(--space-2); }
+.collection .sub-note { word-break: keep-all; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .collection .period-picker button, .collection .refresh, .collection-filter select { min-height: var(--control-touch); } .collection-filters .refresh { justify-content: center; } .collection-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; } .collection-filters .period-picker { grid-column: 1 / -1; justify-self: start; } .collection-filter:has(select[name="account"]), .collection-filter:has(select[name="provider"]) { grid-column: 1 / -1; } .collection summary { padding-block: 0 calc(var(--control-touch) - var(--text-control) * var(--leading-ui)); } .collection details[open] .sub-note { margin-top: calc(-1 * var(--space-3)); } }
+@media (max-width: 380px) { .collection .refresh { width: auto; padding: var(--space-2) var(--space-4); } }
 [hidden] { display: none !important; }
 body, h1, h2, h3, h4, p { margin: 0; }
 button, input, select { font: inherit; }

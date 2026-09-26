@@ -5,7 +5,7 @@
 Each 10-second cycle analyses the full retained history. The store keeps usage rows and quota
 observations in memory, reads only rows added since the previous cycle, refetches rows an ingest
 updated, and reloads everything after retention, a raw database write, a valuation setting change,
-or 15 minutes. Collection backs off after consecutive failures, doubling from two minutes up to 30,
+or 15 minutes. Collection backs off after consecutive failures, doubling from five minutes up to 30,
 and a refused credential (401/403) waits 30 minutes before it is sent again.
 
 When deploying a new release, preserve the previous release and the history database, deploy the tested source snapshot, then verify the UI and collection status.
@@ -23,12 +23,13 @@ verified online copy to `~/.local/state/quota-monitor-backups/daily` (set by `--
 `owned-backups.json`. Reinstall the script with `install -m 0700 deploy/backup-history.py
 ~/.local/share/quota-monitor/tools/` after changing it.
 
-Four kinds of record live in the history database, and they do not expire by the same rule.
+The history database records below do not expire by the same rule.
 
 | Record | Tables | When it is dropped |
 |---|---|---|
 | Usage and quota samples | `usage`, `samples` | Older than the retention window (90 days by default) |
 | Price evidence | `price_evidence`, `usage_prices` | With the usage rows the link points at; a record nothing points at goes too |
+| External request attempts | `collection_logs` | After 30 days, during daily maintenance |
 | Quota measurement evidence | `quota_observations` | Same transaction and same boundary as the sample it explains |
 | Model roster | `modelRosterV1` in `meta` | **A different rule.** Never by age |
 

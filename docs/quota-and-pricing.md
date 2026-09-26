@@ -355,7 +355,7 @@ The existing pricing revision replay fills matching previously unpriced records 
 
 ### Ollama legacy GPU quota
 
-The collector polls the configured canonical Ollama `GET /api/usage` every 120 seconds with the existing API key (no inference requests). It persists only allowlisted quota fractions and per-model request counters in the monitor DB. Keys and raw API payloads are never exposed. API-key rotation starts a separate observation series. Session/weekly and migrated monthly windows remain distinct; missing reset timestamps are not invented.
+The collector polls the configured canonical Ollama `GET /api/usage` every five minutes per logical account endpoint with the existing API key (no inference requests). It persists only allowlisted quota fractions and per-model request counters in the monitor DB. Keys and raw API payloads are never exposed. API-key rotation starts a separate observation series. Session/weekly and migrated monthly windows remain distinct; missing reset timestamps are not invented.
 
 Ollama calls retain input/output/cache tokens and latency per request. Published token prices provide a reference valuation, not legacy GPU billing. Existing unpriced Ollama history is replayed once with deduplication to populate reference values and timing records. Old request records are not assigned to the currently active API key.
 
@@ -373,19 +373,21 @@ The configured `google` provider uses a Gemini API key. Its limits are per proje
 
 ### Automatic provider refresh
 
+The current Go runtime uses direct reads with the five-minute per-account endpoint cadence below. The management fallback and worker-lane descriptions in this section describe the earlier collector, not active Go behavior; see [the current data contract](architecture.md#data-contract). In particular, `QUOTA_OPENCODEX_ORIGIN` does not enable a management fallback in the Go runtime.
+
 Set `QUOTA_OPENCODEX_ORIGIN=http://127.0.0.1:10104` to the existing local OpenCodex management listener. Only an explicit HTTP loopback origin is accepted. The monitor reads `admin-api-token` locally, never serves it, and issues GET quota refreshes only for providers without direct ownership, independently at most once every120 seconds. OpenCodex owns provider authentication and token renewal; no login, account selection, or inference endpoint is called.
 
 Active refresh ownership is exclusive per provider:
 
 | Provider | Owner when direct collection is enabled | Cadence |
 |---|---|---|
-| OpenAI | Direct wham usage |120s, account/endpoint backoff|
-| Anthropic | Direct OAuth usage |120s, account/endpoint backoff|
-| Cursor | Direct period usage |120s, account/endpoint backoff|
-| xAI | Direct credits and billing (distinct endpoints) |120s, account/endpoint backoff|
-| Command Code, OpenCode Go | Destination-checked direct reader |120s, account/endpoint backoff|
-| Ollama Cloud | Dedicated usage reader, independent keys |120s|
-| Devin | Direct GetUserStatus using existing OCX login; weekly and visible daily quota |120s + backoff|
+| OpenAI | Direct wham usage |5m, account/endpoint backoff|
+| Anthropic | Direct OAuth usage |5m, account/endpoint backoff|
+| Cursor | Direct period usage |5m, account/endpoint backoff|
+| xAI | Direct credits and billing (distinct endpoints) |5m, account/endpoint backoff|
+| Command Code, OpenCode Go | Destination-checked direct reader |5m, account/endpoint backoff|
+| Ollama Cloud | Dedicated usage reader, independent keys |5m|
+| Devin | Direct GetUserStatus using existing OCX login; weekly and visible daily quota |5m + backoff|
 | Google (Gemini API key), Devin CLI without direct ownership | Passive usage logs/cache; no supported OCX quota reader | No forced quota calls |
 | Other enabled providers, or direct-off providers | Separate OpenCodex management reader per provider |120s|
 
@@ -393,7 +395,7 @@ A direct-owned provider never also receives monitor-triggered OpenCodex forced r
 
 The server main thread reads only its last published snapshot in memory. A background worker owns SQLite, files and provider calls. It publishes retained data before starting network work and runs local ingestion then publishes a completed snapshot on a10second schedule, independently of provider requests. Slow ingestion leaves the previous complete snapshot available. Cold startup returns a collecting response immediately until retained data is ready. A publication failure or more than30 seconds without publication marks the retained response delayed/error; it never makes HTTP await the worker. Per-provider lanes prevent a slow provider from delaying another, and local log ingestion never awaits those lanes. Graceful shutdown drains writes before closing SQLite, with an8second worker termination bound for stuck IO. The explicit `collector.collect()` library call still awaits quota work for deterministic tests/offline recovery; production `start()` uses separate jobs.
 
-Fallback OpenAI management refresh covers every native/pool account, OAuth providers every stored account, and API-key providers the per-key quota API. Anthropic quota normally refreshes every two minutes. A failed request, missing account or unavailable account backs off forced retries for two, four, then at most eight minutes; a healthy sibling does not bypass this delay. A complete successful lookup restores the two-minute cadence. Newer valid account observations can replace an older failed lookup while retries wait. The web reads the monitor every 10 seconds. During a quota refresh, the last completed result stays available until the next result is ready. New configured providers are discovered on each collection. Ollama retains its dedicated probe for model counters. A legacy bare key is matched to OpenCodex's exact key-ID projection, without publishing a key fingerprint. Normalized measurements are persisted in the monitor DB so API-key quotas survive a restart. Failed, missing, expired, or reauth-required responses never acquire a fresh observation timestamp. A transient lookup failure preserves recent measured values and their calculations. Account `status` and window `stale` describe measurement eligibility; optional `account.refresh` separately reports `status` (`ok` or `delayed`), `lastAttemptAt` and `nextAttemptAt` (nullable ISO timestamps). The next-attempt time is a schedule, not a guaranteed completion time. The management response does not expose the upstream error reason, so the dashboard reports lookup delay without claiming every failure is rate limiting. Values older than 15 minutes, future-dated values, elapsed reset windows, paused accounts and reauthentication requirements remain excluded from current calculations. Repeated cache reads never add new observation timestamps or manufactured idle history.
+Fallback OpenAI management refresh covers every native/pool account, OAuth providers every stored account, and API-key providers the per-key quota API. The direct Anthropic quota reader normally refreshes every five minutes per account endpoint; the legacy management fallback described below is not implemented by the current Go runtime. A failed request, missing account or unavailable account backs off forced retries for two, four, then at most eight minutes; a healthy sibling does not bypass this delay. A complete successful lookup restores the two-minute cadence. Newer valid account observations can replace an older failed lookup while retries wait. The web reads the monitor every 10 seconds. During a quota refresh, the last completed result stays available until the next result is ready. New configured providers are discovered on each collection. Ollama retains its dedicated probe for model counters. A legacy bare key is matched to OpenCodex's exact key-ID projection, without publishing a key fingerprint. Normalized measurements are persisted in the monitor DB so API-key quotas survive a restart. Failed, missing, expired, or reauth-required responses never acquire a fresh observation timestamp. A transient lookup failure preserves recent measured values and their calculations. Account `status` and window `stale` describe measurement eligibility; optional `account.refresh` separately reports `status` (`ok` or `delayed`), `lastAttemptAt` and `nextAttemptAt` (nullable ISO timestamps). The next-attempt time is a schedule, not a guaranteed completion time. The management response does not expose the upstream error reason, so the dashboard reports lookup delay without claiming every failure is rate limiting. Values older than 15 minutes, future-dated values, elapsed reset windows, paused accounts and reauthentication requirements remain excluded from current calculations. Repeated cache reads never add new observation timestamps or manufactured idle history.
 
 Dashboard account need uses recorded quota consumption and its weekly/monthly period, independently of API-dollar valuation. Legacy dollar-based API estimates retain their pricing rules.
 

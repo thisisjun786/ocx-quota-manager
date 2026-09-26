@@ -13,7 +13,7 @@ var raw embed.FS
 
 var Required = []string{
 	"index.html", "app.js", "format.js", "quota.js", "dom.js",
-	"views.js", "types.js", "contract.js", "style.css",
+	"views.js", "types.js", "contract.js", "collection.js", "collection-data.js", "style.css",
 }
 
 func FS() fs.FS {

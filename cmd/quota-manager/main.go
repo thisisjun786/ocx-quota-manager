@@ -60,7 +60,7 @@ func main() {
 	}
 	srv, err := httpserver.New(httpserver.Options{
 		Host: host, Port: port, PublicOrigin: os.Getenv("QUOTA_PUBLIC_ORIGIN"),
-		Public: public, Snapshot: rt.Snapshot,
+		Public: public, Snapshot: rt.Snapshot, CollectionLogs: hist.ListCollectionLogs,
 	})
 	if err != nil {
 		log.Fatal(err)
