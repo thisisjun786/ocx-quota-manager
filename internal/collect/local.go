@@ -97,12 +97,14 @@ func (r Reader) LoadLocal(now time.Time) (Local, error) {
 	} else {
 		out.Files["codexAuth"] = FileMissing
 	}
+	var claudeToken, claudeAccountID string
 	if r.ClaudeHome != "" {
 		claude := load("claudeCredentials", filepath.Join(r.ClaudeHome, ".credentials.json"))
-		if tok := claudeNativeToken(claude.obj); tok != "" {
-			out.Bindings = append(out.Bindings, Binding{
-				Provider: "anthropic", AccountID: "claude-native", Kind: KindOAuth, Token: tok, Enabled: true, Source: "claudeCredentials",
-			})
+		claudeToken = claudeNativeToken(claude.obj)
+		if claudeToken != "" {
+			profile := load("claudeProfile", filepath.Clean(r.ClaudeHome)+".json")
+			account, _ := profile.obj["oauthAccount"].(map[string]any)
+			claudeAccountID = text(account["accountUuid"])
 		}
 	} else {
 		out.Files["claudeCredentials"] = FileMissing
@@ -215,8 +217,33 @@ func (r Reader) LoadLocal(now time.Time) (Local, error) {
 			ID: id, Name: name, Enabled: !disabled, DefaultModel: def, SupportedModels: filtered, Accounts: accounts,
 		})
 	}
-	// Native credentials are loaded before provider configuration. Apply the
-	// provider opt-out after every credential source has been projected.
+	// OCX owns the canonical account ID, history and opt-outs. Native Claude
+	// credentials must not create a second account for the same physical UUID,
+	// even when the two login sessions have different tokens.
+	claudeInOCX := false
+	if claudeAccountID != "" {
+		set, _ := auth.obj["anthropic"].(map[string]any)
+		for _, p := range out.Providers {
+			if p.ID != "anthropic" {
+				continue
+			}
+			for _, a := range p.Accounts {
+				for _, entry := range records(set["accounts"]) {
+					credential, _ := entry["credential"].(map[string]any)
+					if text(entry["id"]) == a.ID && text(credential["accountId"]) == claudeAccountID {
+						claudeInOCX = true
+					}
+				}
+			}
+		}
+	}
+	if claudeToken != "" && !claudeInOCX {
+		out.Bindings = append(out.Bindings, Binding{
+			Provider: "anthropic", AccountID: "claude-native", Kind: KindOAuth, Token: claudeToken,
+			AccountRef: stringRef(claudeAccountID), Enabled: true, Source: "claudeCredentials",
+		})
+	}
+	// Apply the provider opt-out after every credential source is projected.
 	for i := range out.Bindings {
 		binding := &out.Bindings[i]
 		if out.Files["provider:"+binding.Provider] == FileDisabled {
@@ -792,7 +819,7 @@ func warningFor(name string) string {
 	labels := map[string]string{
 		"ocxConfig": "설정", "ocxAuth": "로그인", "codexQuotaCache": "OpenAI 사용량",
 		"providerQuotaCache": "프로바이더 사용량", "ocxCodexAccounts": "OpenAI 계정",
-		"codexAuth": "Codex 기본 로그인", "claudeCredentials": "Claude 로그인",
+		"codexAuth": "Codex 기본 로그인", "claudeCredentials": "Claude 로그인", "claudeProfile": "Claude 계정",
 	}
 	label := labels[name]
 	if label == "" {

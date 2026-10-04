@@ -153,7 +153,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	}
 	// An unreadable credential source is not an authoritative empty roster.
 	// Keep the last public snapshot without reusing credentials for new calls.
-	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials"} {
+	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials", "claudeProfile"} {
 		switch local.Files[key] {
 		case collect.FileMalformed, collect.FileUnreadable, collect.FileOversized:
 			rt.markFailureWithNative(ctx, now)
