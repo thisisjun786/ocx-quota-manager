@@ -104,8 +104,9 @@ older copies cannot reduce it. Contradictory identities/routes or incomparable c
 sticky conflict.
 Antigravity parser revision 2 treats usage field 1 as a model enum, not input tokens,
 and skips model-only metadata. A revision change rereads unchanged databases in bounded batches.
-For matching legacy generation evidence, the ledger subtracts that enum once from the stored input
-before comparing streaming vectors, recalculates its valuation and preserves the stable identity.
+Only an observation reproducing the complete legacy token vector authorizes subtracting its enum
+once from stored input. The ledger then compares streaming vectors, recalculates the valuation and
+preserves the stable identity. A partial copy cannot authorize the correction.
 The parser revision and enum are retained as provenance. Replays cannot restore the inflated input
 or lower a previously completed output; conflicts stay excluded.
 Input includes cached tokens; output already includes reasoning. Explicit Claude one-hour cache writes

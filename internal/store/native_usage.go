@@ -162,12 +162,15 @@ func mergeNative(old, next nativeusage.Event) nativeusage.Event {
 			return old // A legacy replay must not restore the model enum as tokens.
 		}
 		if old.ParserRevision < nativeusage.AntigravityRevision && next.ParserRevision == nativeusage.AntigravityRevision {
-			// Revision 1 added the model enum once to input. Normalize the old
-			// completed vector before dominance comparison so a partial source
-			// copy cannot reduce output/cache counters during this correction.
+			// Revision 1 added the model enum once to input. Only a source
+			// observation reproducing the entire legacy vector proves which
+			// enum belongs to it. A partial clone cannot authorize subtraction.
 			if old.Evidence != "antigravity-generation" || next.Evidence != old.Evidence || old.Route != nativeusage.Direct || next.Route != old.Route ||
 				next.ModelEnum < 0 || next.ModelEnum > old.Input-old.CacheRead-old.CacheWrite {
 				old.Route, old.Evidence = nativeusage.Conflict, "conflicting-parser-revision"
+				return old
+			}
+			if old.Input != next.Input+next.ModelEnum || old.Output != next.Output || old.CacheRead != next.CacheRead || old.CacheWrite != next.CacheWrite || old.CacheWrite1h != next.CacheWrite1h {
 				return old
 			}
 			old.Input -= next.ModelEnum

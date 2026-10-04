@@ -30,6 +30,14 @@ func TestAntigravityParserCorrectionPreservesCompletedUsage(t *testing.T) {
 	if err := h.CommitNative("antigravity", nativeBatch(next), old.At+1000); err != nil {
 		t.Fatal(err)
 	}
+	partial, _ := h.NativeUsage()
+	if *partial.Rows[0].Input != float64(old.Input) {
+		t.Fatal("partial source authorized correction")
+	}
+	next.Output = old.Output
+	if err := h.CommitNative("antigravity", nativeBatch(next), old.At+1000); err != nil {
+		t.Fatal(err)
+	}
 	view, err := h.NativeUsage()
 	if err != nil || len(view.Rows) != 1 || *view.Rows[0].Input != 130 || *view.Rows[0].Output != 5 || *view.Rows[0].USD >= *before.Rows[0].USD {
 		t.Fatalf("correction failed: %#v %v", view, err)
@@ -70,6 +78,31 @@ func TestAntigravityParserCorrectionPreservesCompletedUsage(t *testing.T) {
 	}
 	if n, _ := h.Count("usage"); n != 0 {
 		t.Fatal("OCX ledger changed")
+	}
+}
+
+func TestAntigravityCorrectionRequiresMatchingLegacyVector(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		for _, staleEnum := range []int64{0, 10} {
+			old := nativeEvent("matching-legacy")
+			old.Client, old.Provider, old.Evidence = "antigravity", "antigravity", "antigravity-generation"
+			old.Input, old.CacheRead, old.CacheWrite, old.CacheWrite1h = 100, 0, 0, 0
+			correct := old
+			correct.Input, correct.ParserRevision, correct.ModelEnum = 80, nativeusage.AntigravityRevision, 20
+			stale := correct
+			stale.Input, stale.ModelEnum = 60, staleEnum
+			sequence := []nativeusage.Event{stale, correct}
+			if reverse {
+				sequence = []nativeusage.Event{correct, stale}
+			}
+			got := old
+			for _, e := range sequence {
+				got = mergeNative(got, e)
+			}
+			if !reflect.DeepEqual(got, correct) {
+				t.Fatalf("reverse=%v enum=%d got=%+v", reverse, staleEnum, got)
+			}
+		}
 	}
 }
 
