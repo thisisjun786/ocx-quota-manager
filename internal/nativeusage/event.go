@@ -10,7 +10,15 @@ import (
 )
 
 const Revision = 1
+const AntigravityRevision = 2
 const MaxTokens int64 = 1 << 52
+
+func SourceRevision(client string) int {
+	if client == "antigravity" {
+		return AntigravityRevision
+	}
+	return Revision
+}
 
 type Route string
 
@@ -30,6 +38,8 @@ type Event struct {
 	Tier                                               string
 	Route                                              Route
 	Evidence                                           string
+	ParserRevision                                     int   `json:",omitempty"`
+	ModelEnum                                          int64 `json:",omitempty"`
 }
 
 func Hash(parts ...string) string {

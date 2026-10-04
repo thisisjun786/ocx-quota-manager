@@ -1,11 +1,89 @@
 package store
 
 import (
+	"encoding/json"
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/nativeusage"
 )
+
+func TestAntigravityParserCorrectionPreservesCompletedUsage(t *testing.T) {
+	dir := t.TempDir()
+	h, err := Open(dir, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRate(t, h)
+	old := nativeEvent("parser-correction")
+	old.Client, old.Provider, old.Evidence = "antigravity", "antigravity", "antigravity-generation"
+	old.Input += 900
+	if err := h.CommitNative("antigravity", nativeBatch(old), old.At+1000); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := h.NativeUsage() // Populate cache before correction.
+	next := old
+	next.Input -= 900
+	next.Output-- // A stale partial copy must not lower the completed output.
+	next.ParserRevision, next.ModelEnum = nativeusage.AntigravityRevision, 900
+	if err := h.CommitNative("antigravity", nativeBatch(next), old.At+1000); err != nil {
+		t.Fatal(err)
+	}
+	view, err := h.NativeUsage()
+	if err != nil || len(view.Rows) != 1 || *view.Rows[0].Input != 130 || *view.Rows[0].Output != 5 || *view.Rows[0].USD >= *before.Rows[0].USD {
+		t.Fatalf("correction failed: %#v %v", view, err)
+	}
+	var corrected nativeusage.Event
+	var raw string
+	if err := h.db.QueryRow(`SELECT event FROM native_usage WHERE id=?`, old.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &corrected); err != nil {
+		t.Fatal(err)
+	}
+	want := old
+	want.Input -= 900
+	want.ParserRevision, want.ModelEnum = nativeusage.AntigravityRevision, 900
+	if !reflect.DeepEqual(corrected, want) {
+		t.Fatalf("provenance changed: %+v", corrected)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, err = Open(dir, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	for i := 0; i < 2; i++ {
+		if err := h.CommitNative("antigravity", nativeBatch(next, old), old.At+1000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var replay string
+	if err := h.db.QueryRow(`SELECT event FROM native_usage WHERE id=?`, old.ID).Scan(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if raw != replay {
+		t.Fatal("replay changed corrected ledger")
+	}
+	if n, _ := h.Count("usage"); n != 0 {
+		t.Fatal("OCX ledger changed")
+	}
+}
+
+func TestAntigravityCorrectionCannotEraseConflict(t *testing.T) {
+	old := nativeEvent("conflict-correction")
+	old.Client, old.Provider = "antigravity", "antigravity"
+	old.Route, old.Evidence = nativeusage.Conflict, "conflicting-source"
+	next := old
+	next.Route, next.Evidence = nativeusage.Direct, "antigravity-generation"
+	next.ParserRevision, next.ModelEnum = nativeusage.AntigravityRevision, 10
+	if got := mergeNative(old, next); !reflect.DeepEqual(got, old) {
+		t.Fatal("conflict revived")
+	}
+}
 
 func nativeEvent(id string) nativeusage.Event {
 	return nativeusage.Event{ID: nativeusage.Hash(id), Client: "claude", Provider: "anthropic", PriceProvider: "anthropic", Model: "native-test", At: 1800000000000, Input: 130, Output: 5, CacheRead: 100, CacheWrite: 20, CacheWrite1h: 15, Route: nativeusage.Direct, Evidence: "anthropic-request-header"}

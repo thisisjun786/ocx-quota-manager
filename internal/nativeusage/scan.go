@@ -24,6 +24,7 @@ type Cursor struct {
 	Visited             int64
 	Head, Tail          string
 	FileID              string
+	IncompleteTail      bool
 	State               State
 }
 
@@ -32,11 +33,11 @@ type Source struct {
 	Roots  []string
 }
 type Batch struct {
-	Events                          []Event
-	Cursors                         map[string]Cursor
-	Files, Pending, Invalid, Failed int
-	Bytes                           int64
-	Present                         bool
+	Events                                   []Event
+	Cursors                                  map[string]Cursor
+	Files, Pending, Waiting, Invalid, Failed int
+	Bytes                                    int64
+	Present                                  bool
 }
 
 type file struct {
@@ -123,7 +124,10 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 				size += wal.Size()
 			}
 		}
-		if prev.Revision == Revision && prev.FileID == fileID(f.info) && prev.Size == size && prev.MTime == mtime && prev.Offset >= f.info.Size() {
+		if prev.Revision == SourceRevision(source.Client) && prev.FileID == fileID(f.info) && prev.Size == size && prev.MTime == mtime && (prev.Offset >= f.info.Size() || prev.IncompleteTail) {
+			if prev.IncompleteTail {
+				b.Waiting++
+			}
 			continue
 		}
 		if b.Files >= filesPerBatch || b.Bytes >= batchBudget {
@@ -149,7 +153,7 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 				}
 			}
 			b.Bytes += size
-			b.Cursors[key] = Cursor{Revision: Revision, Offset: f.info.Size(), Size: size, MTime: mtime, Visited: now, FileID: fileID(f.info)}
+			b.Cursors[key] = Cursor{Revision: SourceRevision(source.Client), Offset: f.info.Size(), Size: size, MTime: mtime, Visited: now, FileID: fileID(f.info)}
 			continue
 		}
 		events, next, n, invalid, err := readJSONL(ctx, f, source.Client, prev, cutoff, now)
@@ -162,7 +166,9 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 		b.Events = append(b.Events, events...)
 		next.Visited = now
 		b.Cursors[key] = next
-		if next.Offset < f.info.Size() {
+		if next.IncompleteTail {
+			b.Waiting++
+		} else if next.Offset < f.info.Size() {
 			b.Pending++
 		}
 	}
@@ -185,6 +191,7 @@ func readJSONL(ctx context.Context, src file, client string, prev Cursor, cutoff
 	next.FileID = fileID(src.info)
 	next.Size = size
 	next.MTime = src.info.ModTime().UnixNano()
+	next.IncompleteTail = false
 	if _, err = f.Seek(next.Offset, io.SeekStart); err != nil {
 		return nil, prev, 0, 0, err
 	}
@@ -201,6 +208,7 @@ func readJSONL(ctx context.Context, src file, client string, prev Cursor, cutoff
 			return nil, prev, 0, 0, err
 		}
 		if !complete {
+			next.IncompleteTail = n > 0
 			break
 		} // leave a trailing partial record for the next pass
 		next.Offset += n

@@ -23,6 +23,7 @@ type nativeStore interface {
 type nativeStatus struct {
 	Status         string `json:"status"`
 	PendingFiles   int    `json:"pendingFiles"`
+	WaitingFiles   int    `json:"waitingFiles"`
 	InvalidRecords int    `json:"invalidRecords"`
 	FailedFiles    int    `json:"failedFiles"`
 	ObservedAt     string `json:"observedAt"`
@@ -66,9 +67,12 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 	}
 	sources := []nativeusage.Source{
 		{Client: "claude", Roots: []string{child(rt.ClaudeHome, "projects"), child(rt.ClaudeHome, "transcripts")}},
-		{Client: "codex", Roots: []string{child(rt.CodexHome, "sessions"), child(rt.CodexHome, "archived_sessions")}},
 		{Client: "antigravity", Roots: []string{child(rt.GeminiHome, "antigravity-cli/conversations"), child(rt.GeminiHome, "antigravity/conversations")}},
 	}
+	// This deployment's Codex traffic is entirely routed through OCX. Its
+	// authoritative usage is already ingested there; reading the local client
+	// transcripts would duplicate the same calls and create false exclusions.
+	out["codex"] = nativeStatus{Status: "via-ocx", ObservedAt: now.UTC().Format(time.RFC3339Nano)}
 	for _, source := range sources {
 		s := nativeStatus{Status: "absent", ObservedAt: now.UTC().Format(time.RFC3339Nano)}
 		cursors, err := h.NativeCursors(source.Client)
@@ -84,6 +88,7 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 				err = commitErr
 			}
 			s.PendingFiles, s.InvalidRecords, s.FailedFiles = b.Pending, b.Invalid, b.Failed
+			s.WaitingFiles = b.Waiting
 			if b.Present {
 				s.Status = "ok"
 			}
@@ -104,24 +109,21 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 		warnings = append(warnings, "도구별 사용량 기록을 읽지 못했습니다.")
 		return out, warnings
 	}
-	labels := map[string]string{"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"}
+	labels := map[string]string{"claude": "Claude Code", "antigravity": "Antigravity"}
 	for _, source := range sources {
 		s := out[source.Client]
 		s.NativeSummary = view.Summary[source.Client]
 		out[source.Client] = s
 		label := labels[source.Client]
 		if s.Pending+s.Conflicts > 0 {
-			amount := ""
-			if s.PendingUSD != nil {
-				amount = fmt.Sprintf(" (별도 API 환산액 $%.2f)", *s.PendingUSD)
-			}
-			warnings = append(warnings, fmt.Sprintf("%s 사용량 %d건%s은 경로를 확인할 수 없어 중복 방지를 위해 통합 비용에서 제외했습니다.", label, s.Pending+s.Conflicts, amount))
+			warnings = append(warnings, fmt.Sprintf("%s 사용 기록 %d건을 확인해야 합니다.", label, s.Pending+s.Conflicts))
 		}
-		if s.Status == "error" || s.Status == "partial" {
-			warnings = append(warnings, label+" 사용량 수집이 일부 지연되어 확인된 기록만 표시합니다.")
-		}
-		if s.PendingFiles > 0 {
-			warnings = append(warnings, label+" 과거 사용량을 순차 수집하고 있습니다.")
+		if s.Status == "error" {
+			warnings = append(warnings, label+" 사용량을 읽지 못했습니다.")
+		} else if s.FailedFiles > 0 {
+			warnings = append(warnings, fmt.Sprintf("%s 사용량 파일 %d개를 읽지 못했습니다.", label, s.FailedFiles))
+		} else if s.InvalidRecords > 0 {
+			warnings = append(warnings, fmt.Sprintf("%s 사용 기록 %d건의 형식을 확인해야 합니다.", label, s.InvalidRecords))
 		}
 	}
 	return out, warnings

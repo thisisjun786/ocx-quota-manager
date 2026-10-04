@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,26 +102,54 @@ func TestNativeCostsAdvanceDuringOCXFailure(t *testing.T) {
 	}
 }
 
-func TestNativeUnknownAndProxyStaySeparate(t *testing.T) {
+func TestCodexCostsOwnedByOCX(t *testing.T) {
 	rt, h, clk := nativeRuntime(t)
 	e := nativeusage.Event{ID: nativeusage.Hash("native"), Client: "codex", Provider: "openai", PriceProvider: "openai", Model: "gpt-test", At: clk.Now().UnixMilli() - 1000, Input: 100, Output: 10, Route: nativeusage.Unknown, Evidence: "route-unverified"}
 	proxy := e
 	proxy.ID = nativeusage.Hash("proxy")
 	proxy.Route = nativeusage.Proxy
-	if err := h.CommitNative("codex", nativeusage.Batch{Events: []nativeusage.Event{e, proxy}}, clk.Now().UnixMilli()); err != nil {
+	direct := e
+	direct.ID = nativeusage.Hash("old-direct")
+	direct.Route = nativeusage.Direct
+	if err := h.CommitNative("codex", nativeusage.Batch{Events: []nativeusage.Event{e, proxy, direct}}, clk.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	writeUsageLog(t, rt.Home, []map[string]any{{"requestId": "codex-via-ocx", "timestamp": clk.Now().UnixMilli() - 2000, "provider": "openai", "model": "gpt-test", "usage": map[string]any{"inputTokens": 100, "outputTokens": 10}}})
+	local := filepath.Join(rt.CodexHome, "sessions")
+	if err := os.MkdirAll(local, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "ignored.jsonl"), []byte("malformed source deliberately not read\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	addNativeTranscript(t, rt, "msg_direct", clk.Now().UnixMilli()-500)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 1 {
-		t.Fatal("pending counted", n)
+	if n := costRequests(t, rt); n != 2 {
+		t.Fatal("Codex must be counted exactly once via OCX", n)
 	}
 	s := rt.Snapshot()
-	if len(s.Warnings) == 0 {
-		t.Fatal("pending invisible")
+	for _, w := range s.Warnings {
+		if strings.Contains(w, "Codex") {
+			t.Fatal("redundant Codex warning", w)
+		}
+	}
+	cursors, err := h.NativeCursors("codex")
+	if err != nil || len(cursors) != 0 {
+		t.Fatal("Codex local logs scanned", err)
+	}
+	v, err := h.NativeUsage()
+	if err != nil || len(v.Rows) != 1 {
+		t.Fatal("legacy Codex candidates entered native total", err)
+	}
+	if _, exists := v.Summary["codex"]; exists {
+		t.Fatal("legacy duplicate cost summary")
+	}
+	var retained int
+	if err := h.DB().QueryRow(`SELECT count(*) FROM native_usage WHERE client='codex'`).Scan(&retained); err != nil || retained != 3 {
+		t.Fatal("legacy history must be retained", retained, err)
 	}
 	n := s.Analytics.(map[string]any)["nativeUsage"].(map[string]nativeStatus)["codex"]
-	if n.Pending != 1 || n.Proxy != 1 {
+	if n.Status != "via-ocx" || n.Pending != 0 || n.PendingUSD != nil {
 		t.Fatal(n)
 	}
 	raw, _ := json.Marshal(s)
@@ -143,5 +172,33 @@ func TestNativeCollectionSurvivesMalformedOCXConfig(t *testing.T) {
 	rt.cycle(context.Background())
 	if n := costRequests(t, rt); n != 1 {
 		t.Fatal("native blocked by OCX config", n)
+	}
+}
+
+func TestNativeIncompleteTailDoesNotWarnOrClaimBackfill(t *testing.T) {
+	rt, _, clk := nativeRuntime(t)
+	addNativeTranscript(t, rt, "msg_complete", clk.Now().UnixMilli()-1000)
+	path := filepath.Join(rt.ClaudeHome, "projects", "project", "msg_complete.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"type":"assistant","message":`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		rt.cycle(context.Background())
+		s := rt.Snapshot()
+		if len(s.Warnings) != 0 {
+			t.Fatal("unfinished source displayed as a problem", s.Warnings)
+		}
+		n := s.Analytics.(map[string]any)["nativeUsage"].(map[string]nativeStatus)["claude"]
+		if n.Status != "ok" || n.PendingFiles != 0 || n.WaitingFiles != 1 || n.Included != 1 {
+			t.Fatal(n)
+		}
 	}
 }

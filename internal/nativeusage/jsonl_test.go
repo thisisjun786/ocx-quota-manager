@@ -178,3 +178,29 @@ func TestScanAtomicReplacementWithPreservedSizeAndTime(t *testing.T) {
 		t.Fatal("replacement hidden by stat equality", second, err)
 	}
 }
+
+func TestIncompleteTailIsWaitingForSourceNotBackfill(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "partial.jsonl")
+	complete := claudeLine("msg_before", "req_0123456789abcdef", 5)
+	next := claudeLine("msg_after", "req_0123456789abcdef", 8)
+	if err := os.WriteFile(path, append(append([]byte{}, complete...), next[:len(next)/2]...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := Source{Client: "claude", Roots: []string{dir}}
+	first, err := Scan(context.Background(), source, nil, 0, 1800000000000)
+	if err != nil || len(first.Events) != 1 || first.Pending != 0 {
+		t.Fatal("partial tail reported as backfill", first, err)
+	}
+	second, err := Scan(context.Background(), source, first.Cursors, 0, 1800000001000)
+	if err != nil || len(second.Events) != 0 || second.Files != 0 || second.Pending != 0 {
+		t.Fatal("unchanged tail read repeatedly", second, err)
+	}
+	if err = os.WriteFile(path, append(append([]byte{}, complete...), next...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	third, err := Scan(context.Background(), source, first.Cursors, 0, 1800000002000)
+	if err != nil || len(third.Events) != 1 || third.Events[0].ID == first.Events[0].ID || third.Pending != 0 {
+		t.Fatal("completed tail lost or duplicated", third, err)
+	}
+}

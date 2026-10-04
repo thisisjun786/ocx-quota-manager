@@ -21,6 +21,7 @@ const (
 
 type agGeneration struct {
 	index           int64
+	modelOnly       bool
 	response, label string
 	event           Event
 }
@@ -81,7 +82,7 @@ func ReadAntigravityWithDiagnostics(ctx context.Context, path string) ([]Event, 
 		return nil, 0, err
 	}
 	events, invalid := agEvents(generations, times)
-	if len(generations) > 0 && len(events) == 0 {
+	if invalid > 0 && len(events) == 0 {
 		return nil, invalid, fmt.Errorf("antigravity: unsupported metadata: no generation with usage, response ID and genuine time")
 	}
 	if err = ctx.Err(); err != nil {
@@ -156,8 +157,22 @@ func agParseGeneration(idx int64, blob []byte) (agGeneration, error) {
 	if err != nil {
 		return g, err
 	}
-	g.event = Event{Client: "antigravity", Provider: "antigravity", Model: Model(rawModel), Route: Direct, Evidence: "antigravity-generation"}
-	g.event.Input, err = agTokenSum(usage, 1, 2, 5)
+	g.event = Event{Client: "antigravity", Provider: "antigravity", Model: Model(rawModel), Route: Direct, Evidence: "antigravity-generation", ParserRevision: AntigravityRevision}
+	g.event.ModelEnum, err = agTokenSum(usage, 1)
+	if err != nil {
+		return g, err
+	}
+	// ModelUsageStats #1 is a model enum, not a token counter. A
+	// model-only envelope contains no usage observation to import.
+	if len(usage) == 1 {
+		if _, ok := usage[1]; ok {
+			if _, err := usage.integer(1); err != nil {
+				return g, err
+			}
+			g.modelOnly = true
+		}
+	}
+	g.event.Input, err = agTokenSum(usage, 2, 5)
 	if err != nil {
 		return g, err
 	}
@@ -280,6 +295,9 @@ func agEvents(generations []agGeneration, times agTimes) ([]Event, int) {
 	var events []Event
 	invalid := 0
 	for _, g := range generations {
+		if g.modelOnly {
+			continue
+		}
 		if strings.TrimSpace(g.response) == "" {
 			invalid++
 			continue

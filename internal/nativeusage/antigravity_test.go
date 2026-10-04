@@ -67,15 +67,37 @@ func agTestInsertStep(t *testing.T, db *sql.DB, response string, genIndex int, s
 	}
 }
 
+func TestAntigravityRevisionReplaysUnchangedFileOnce(t *testing.T) {
+	path, db := agTestDB(t)
+	agTestInsert(t, db, 0, agTestGeneration(agTestUsage("revision"), "gemini-test", "", 1700000000))
+	source := Source{Client: "antigravity", Roots: []string{filepath.Dir(path)}}
+	now := int64(1700000001000)
+	b, err := Scan(context.Background(), source, nil, 0, now)
+	if err != nil || len(b.Events) != 1 {
+		t.Fatal(b, err)
+	}
+	key := Hash("antigravity", path)
+	legacy := b.Cursors[key]
+	legacy.Revision = 1
+	b, err = Scan(context.Background(), source, map[string]Cursor{key: legacy}, 0, now+1)
+	if err != nil || len(b.Events) != 1 || b.Events[0].Input != 60 || b.Events[0].ModelEnum != 10 || b.Events[0].ParserRevision != AntigravityRevision || b.Cursors[key].Revision != AntigravityRevision {
+		t.Fatal(b, err)
+	}
+	replay, err := Scan(context.Background(), source, b.Cursors, 0, now+2)
+	if err != nil || replay.Files != 0 || len(replay.Events) != 0 {
+		t.Fatal("unchanged replay", replay, err)
+	}
+}
+
 func TestAntigravityMalformedAndOverflow(t *testing.T) {
 	cases := map[string][]byte{
 		"truncated":          {0x0a, 0x05, 0x01},
 		"tag-zero":           {0},
 		"overflow-varint":    agTestBytes(1, agTestBytes(4, append([]byte{8}, bytes.Repeat([]byte{0xff}, 11)...))),
-		"counter-overflow":   agTestGeneration(agTestJoin(agTestVar(1, math.MaxUint64), agTestBytes(11, []byte("response"))), "gemini-test", "", 1700000000),
-		"sum-overflow":       agTestGeneration(agTestJoin(agTestVar(1, uint64(MaxTokens)), agTestVar(5, 1), agTestBytes(11, []byte("response"))), "gemini-test", "", 1700000000),
+		"counter-overflow":   agTestGeneration(agTestJoin(agTestVar(2, math.MaxUint64), agTestBytes(11, []byte("response"))), "gemini-test", "", 1700000000),
+		"sum-overflow":       agTestGeneration(agTestJoin(agTestVar(2, uint64(MaxTokens)), agTestVar(5, 1), agTestBytes(11, []byte("response"))), "gemini-test", "", 1700000000),
 		"output-overflow":    agTestGeneration(agTestJoin(agTestVar(9, uint64(MaxTokens)), agTestVar(10, 1), agTestBytes(11, []byte("response"))), "gemini-test", "", 1700000000),
-		"wrong-wire":         agTestGeneration(agTestBytes(1, []byte("10")), "gemini-test", "", 1700000000),
+		"wrong-wire":         agTestGeneration(agTestBytes(2, []byte("10")), "gemini-test", "", 1700000000),
 		"timestamp-overflow": agTestGeneration(agTestUsage("response"), "gemini-test", "", math.MaxUint64),
 		"blob-limit":         bytes.Repeat([]byte{0}, agMaxBlob+1),
 	}
@@ -169,7 +191,7 @@ func TestAntigravityGenerationAndCopyDedupReadOnly(t *testing.T) {
 		t.Fatalf("%v %v", events, err)
 	}
 	e := events[0]
-	if e.Input != 70 || e.CacheRead != 40 || e.Output != 110 || e.At != 1700000000123 || e.Model != "gemini-test" || e.PriceProvider != "google" || e.Provider != "antigravity" || e.Client != "antigravity" || e.Route != Direct || e.Evidence != "antigravity-generation" || !e.Valid() {
+	if e.Input != 60 || e.CacheRead != 40 || e.Output != 110 || e.At != 1700000000123 || e.Model != "gemini-test" || e.PriceProvider != "google" || e.Provider != "antigravity" || e.Client != "antigravity" || e.Route != Direct || e.Evidence != "antigravity-generation" || !e.Valid() {
 		t.Fatalf("incorrect event: %+v", e)
 	}
 	after, err := os.ReadFile(path)
@@ -325,11 +347,32 @@ func TestAntigravityDuplicateResponsePreservesDifferingObservations(t *testing.T
 	if err != nil || invalid != 0 || len(events) != 3 {
 		t.Fatalf("events=%v invalid=%d err=%v", events, invalid, err)
 	}
-	expectedInput := []int64{70, 100, 50}
+	expectedInput := []int64{60, 80, 45}
 	expectedOutput := []int64{110, 150, 200}
 	for i, e := range events {
 		if e.ID != events[0].ID || e.Input != expectedInput[i] || e.Output != expectedOutput[i] || !e.Valid() {
 			t.Fatalf("observation %d: %+v", i, e)
 		}
+	}
+}
+
+func TestAntigravityModelOnlyMetadataIsNotUsage(t *testing.T) {
+	path, db := agTestDB(t)
+	agTestInsert(t, db, 0, agTestGeneration(agTestVar(1, 42), "", "", 0))
+	events, invalid, err := ReadAntigravityWithDiagnostics(context.Background(), path)
+	if err != nil || invalid != 0 || len(events) != 0 {
+		t.Fatalf("model-only: included=%d invalid=%d error=%v", len(events), invalid, err)
+	}
+	// A model enum is not a token counter, including with real usage.
+	agTestInsert(t, db, 1, agTestGeneration(agTestJoin(agTestVar(1, 42), agTestVar(2, 20), agTestBytes(11, []byte("completed"))), "gemini-test", "", 1700000000))
+	events, invalid, err = ReadAntigravityWithDiagnostics(context.Background(), path)
+	if err != nil || invalid != 0 || len(events) != 1 || events[0].Input != 20 {
+		t.Fatalf("completed: events=%v invalid=%d error=%v", events, invalid, err)
+	}
+	// Real usage with missing identity remains invalid alongside the good row.
+	agTestInsert(t, db, 2, agTestGeneration(agTestVar(2, 20), "gemini-test", "", 1700000000))
+	events, invalid, err = ReadAntigravityWithDiagnostics(context.Background(), path)
+	if err != nil || invalid != 1 || len(events) != 1 {
+		t.Fatalf("mixed: included=%d invalid=%d error=%v", len(events), invalid, err)
 	}
 }

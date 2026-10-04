@@ -157,6 +157,23 @@ func mergeNative(old, next nativeusage.Event) nativeusage.Event {
 		old.Evidence = "conflicting-source"
 		return old
 	}
+	if old.Client == "antigravity" && next.Client == "antigravity" {
+		if old.ParserRevision >= nativeusage.AntigravityRevision && next.ParserRevision < nativeusage.AntigravityRevision {
+			return old // A legacy replay must not restore the model enum as tokens.
+		}
+		if old.ParserRevision < nativeusage.AntigravityRevision && next.ParserRevision == nativeusage.AntigravityRevision {
+			// Revision 1 added the model enum once to input. Normalize the old
+			// completed vector before dominance comparison so a partial source
+			// copy cannot reduce output/cache counters during this correction.
+			if old.Evidence != "antigravity-generation" || next.Evidence != old.Evidence || old.Route != nativeusage.Direct || next.Route != old.Route ||
+				next.ModelEnum < 0 || next.ModelEnum > old.Input-old.CacheRead-old.CacheWrite {
+				old.Route, old.Evidence = nativeusage.Conflict, "conflicting-parser-revision"
+				return old
+			}
+			old.Input -= next.ModelEnum
+			old.ParserRevision, old.ModelEnum = next.ParserRevision, next.ModelEnum
+		}
+	}
 	a := []int64{old.Input, old.Output, old.CacheRead, old.CacheWrite, old.CacheWrite1h}
 	b := []int64{next.Input, next.Output, next.CacheRead, next.CacheWrite, next.CacheWrite1h}
 	greater, less := false, false
@@ -258,14 +275,16 @@ func quoteNative(e nativeusage.Event, evidence []Evidence, catalog *Catalog) ing
 }
 
 // NativeUsage returns only proven direct rows for cost analysis, plus counts
-// and reference amounts of unresolved candidates. No raw IDs leave this seam.
+// and reference amounts of unresolved candidates. Codex is owned by OCX;
+// retained candidates from earlier collectors are not counted a second time.
+// No raw IDs leave this seam.
 func (h *History) NativeUsage() (NativeView, error) {
 	h.cacheMu.Lock()
 	defer h.cacheMu.Unlock()
 	if h.native != nil {
 		return *h.native, nil
 	}
-	rows, err := h.db.Query(`SELECT id,client,at,route,event,usd,basis FROM native_usage ORDER BY at`)
+	rows, err := h.db.Query(`SELECT id,client,at,route,event,usd,basis FROM native_usage WHERE client IN ('claude','antigravity') ORDER BY at`)
 	if err != nil {
 		return NativeView{}, err
 	}

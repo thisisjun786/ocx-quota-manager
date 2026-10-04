@@ -66,7 +66,7 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_CODEX_HOME` | `$CODEX_HOME` or `~/.codex` | Codex account files, read only |
 | `QUOTA_CLAUDE_HOME` | `~/.claude` | Claude account files and local usage transcripts, read only |
 | `QUOTA_GEMINI_HOME` | `$GEMINI_CLI_HOME` or `~/.gemini` | Antigravity CLI/extension conversation databases, read only |
-| `QUOTA_NATIVE_USAGE` | on | `off` disables local Claude Code, Codex and Antigravity usage collection and their cost overlay |
+| `QUOTA_NATIVE_USAGE` | on | `off` disables local Claude Code and Antigravity usage collection and their cost overlay; Codex remains accounted for through OCX |
 | `QUOTA_DIRECT_PROVIDERS` | unset | Providers whose quota is also read from the provider itself, for example `openai,anthropic,cursor` |
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |
@@ -74,16 +74,18 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 
 ## Local tool usage
 
-Cost analysis also collects local Claude Code, Codex, and Antigravity usage metadata. Collection is
-incremental and bounded; the first backfill runs over several cycles. Tokscale's hourly totals are
-not added to OCX totals because they can contain the same calls and no longer carry request identities.
+Codex calls in this deployment all run through OCX, so OCX is their single source of usage and cost.
+The collector does not scan Codex transcripts or add their totals again. Previously collected local
+Codex candidates remain stored under normal retention, but are not used for costs or warnings.
+
+Cost analysis also collects local Claude Code and Antigravity usage metadata. Collection is
+incremental and bounded. Routine historical imports and unfinished log tails do not produce warning
+banners. Tokscale's hourly totals are not added because they can contain the same calls.
 
 Only native records with routing evidence enter the combined cost. Claude Code records carrying
-an upstream Anthropic request ID and Antigravity generation records are included. Codex transcripts
-usually lack the request endpoint; `model_provider: openai` also occurs with an OCX base URL, so these
-records are collected separately and excluded from the combined amount. Snapshot warnings and
-`analytics.nativeUsage` show pending counts and their known API-equivalent amount. Missing prices
-remain unknown. This preserves a conservative combined total rather than claiming complete billing.
+an upstream Anthropic request ID and Antigravity generation records are included. Missing prices
+remain unknown. `analytics.nativeUsage.codex.status` is `via-ocx`; the other source statuses describe
+local collection. Warnings report actual read/format failures rather than normal background work.
 
 Native source identities are hashed, repeated/streamed records are reconciled, and conflicting
 evidence stays excluded even after replay. Source transcripts and databases are never changed. Native

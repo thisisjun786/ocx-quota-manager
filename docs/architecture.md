@@ -91,8 +91,7 @@ charges.
 
 ### Native usage and costs
 
-The collector also reads Claude Code `projects/**/*.jsonl` and `transcripts/**/*.jsonl`, Codex
-`sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`, and Antigravity's CLI/IDE-extension
+The collector also reads Claude Code `projects/**/*.jsonl` and `transcripts/**/*.jsonl`, and Antigravity's CLI/IDE-extension
 `conversations/*.db` under the configured homes. It reads metadata only and does not launch a
 tool, run inference, sync an IDE, or write any source file. Antigravity desktop RPC caches are
 not an input. SQLite reads use a consistent read-only transaction including committed WAL data.
@@ -102,15 +101,23 @@ not an input. SQLite reads use a consistent read-only transaction including comm
 progress with the associated candidates. Stable response/message identities exclude paths, so a copied
 transcript or database cannot add another call. Claude streaming updates may increase a token vector;
 older copies cannot reduce it. Contradictory identities/routes or incomparable counters produce a
-sticky conflict. Codex cumulative token notifications are differenced and repeated notifications ignored.
+sticky conflict.
+Antigravity parser revision 2 treats usage field 1 as a model enum, not input tokens,
+and skips model-only metadata. A revision change rereads unchanged databases in bounded batches.
+For matching legacy generation evidence, the ledger subtracts that enum once from the stored input
+before comparing streaming vectors, recalculates its valuation and preserves the stable identity.
+The parser revision and enum are retained as provenance. Replays cannot restore the inflated input
+or lower a previously completed output; conflicts stay excluded.
 Input includes cached tokens; output already includes reasoning. Explicit Claude one-hour cache writes
 are priced at their own rate, independently of OCX's configurable cache assumption.
 
 Attribution is conservative: the current OCX Messages response does not forward Anthropic's
 `request-id` header, whereas Claude Code captures it in assistant `requestId`. An upstream `req_`
 ID is the supported direct-call signal; a `msg_` ID alone is not. Antigravity generation metadata
-identifies its direct service. Codex's provider name, model name, current configuration and similar
-timestamps/token counts do not prove a direct call; records without route proof remain pending.
+identifies its direct service. The deployment owner has established that all Codex calls use OCX.
+OCX usage is therefore the sole source for Codex accounting; native Codex transcripts are not scanned.
+Legacy Codex ledger rows remain retained but are filtered from all native cost/summary reads, including
+any older row marked direct. They cannot create an additional charge, pending amount or warning.
 Explicit OCX provider/request markers are excluded. These rules assume unmodified local source logs
 and the documented OCX response behavior; they cannot authenticate forged logs or infer historical
 proxy versions. A changed source contract needs a parser revision and bounded replay.
@@ -119,14 +126,17 @@ Only included ledger rows join the existing cost analysis. Costs use the current
 with OCX rows bounded by their last successful read; native rows continue advancing during an OCX
 outage. Quota calibration, account attribution, coverage and usage periods still use OCX rows alone.
 Native account attribution stays unknown. Missing tariffs retain tokens and unknown dollars.
-`analytics.nativeUsage.{claude,codex,antigravity}` reports source status, pending files, invalid/failed
+`analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters.
+`analytics.nativeUsage.{claude,antigravity}` reports source status, pending files, invalid/failed
 records and included/pending/proxy/conflict counts, with a pending API-equivalent amount when priced.
-These counts cover retained history, not the selected cost period; warnings explain excluded usage.
+These counts cover retained history, not the selected cost period. Routine import progress stays in
+the status data. Banners are reserved for actual failures and unresolved conflicting usage.
 Both confirmed and pending candidates follow the configured history retention/reset boundaries.
 
 Scanning is bounded per source and resumes across collection cycles/restarts. A partial JSONL tail
-is retried, and source errors do not discard previously stored candidates. First-run backfill is
-explicitly incomplete until the backlog is consumed. The old binary ignores the additive native
+keeps its offset and counts as `waitingFiles`, not a pending historical file. An unchanged incomplete
+tail is not reread; an append/replacement reactivates it. Source errors do not discard stored data.
+First-run backfill is incomplete until the backlog is consumed. The old binary ignores the additive native
 tables and still sees the original OCX accounting; no migration of OCX rows is required.
 
 ### Usage periods
