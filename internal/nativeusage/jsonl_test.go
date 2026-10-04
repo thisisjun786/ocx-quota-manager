@@ -147,3 +147,34 @@ func TestScanPartialReplayCopyAndReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestScanAtomicReplacementWithPreservedSizeAndTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.jsonl")
+	if err := os.WriteFile(path, claudeLine("msg_1", "req_0123456789abcdef", 5), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := Source{Client: "claude", Roots: []string{dir}}
+	first, err := Scan(context.Background(), source, nil, 0, 1800000000000)
+	if err != nil || len(first.Events) != 1 {
+		t.Fatal(first, err)
+	}
+	replacement := filepath.Join(dir, "new")
+	if err = os.WriteFile(replacement, claudeLine("msg_2", "req_0123456789abcdef", 5), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(replacement, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Scan(context.Background(), source, first.Cursors, 0, 1800000001000)
+	if err != nil || len(second.Events) != 1 || second.Events[0].ID == first.Events[0].ID {
+		t.Fatal("replacement hidden by stat equality", second, err)
+	}
+}

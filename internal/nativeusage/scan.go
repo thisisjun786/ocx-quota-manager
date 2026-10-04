@@ -23,6 +23,7 @@ type Cursor struct {
 	Offset, Size, MTime int64
 	Visited             int64
 	Head, Tail          string
+	FileID              string
 	State               State
 }
 
@@ -122,7 +123,7 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 				size += wal.Size()
 			}
 		}
-		if prev.Revision == Revision && prev.Size == size && prev.MTime == mtime && prev.Offset >= f.info.Size() {
+		if prev.Revision == Revision && prev.FileID == fileID(f.info) && prev.Size == size && prev.MTime == mtime && prev.Offset >= f.info.Size() {
 			continue
 		}
 		if b.Files >= filesPerBatch || b.Bytes >= batchBudget {
@@ -148,7 +149,7 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 				}
 			}
 			b.Bytes += size
-			b.Cursors[key] = Cursor{Revision: Revision, Offset: f.info.Size(), Size: size, MTime: mtime, Visited: now}
+			b.Cursors[key] = Cursor{Revision: Revision, Offset: f.info.Size(), Size: size, MTime: mtime, Visited: now, FileID: fileID(f.info)}
 			continue
 		}
 		events, next, n, invalid, err := readJSONL(ctx, f, source.Client, prev, cutoff, now)
@@ -159,7 +160,6 @@ func Scan(ctx context.Context, source Source, previous map[string]Cursor, cutoff
 		b.Bytes += n
 		b.Invalid += invalid
 		b.Events = append(b.Events, events...)
-		b.Cursors[key] = next
 		next.Visited = now
 		b.Cursors[key] = next
 		if next.Offset < f.info.Size() {
@@ -178,10 +178,11 @@ func readJSONL(ctx context.Context, src file, client string, prev Cursor, cutoff
 	size := src.info.Size()
 	head := fingerprint(f, 0, min(size, 64))
 	next := prev
-	if prev.Revision != Revision || prev.Offset > size || (prev.Offset == size && prev.MTime != src.info.ModTime().UnixNano()) || (prev.Offset > 0 && (prev.Head != head || prev.Tail != fingerprint(f, max(0, prev.Offset-64), min(prev.Offset, 64)))) {
+	if prev.Revision != Revision || prev.FileID != fileID(src.info) || prev.Offset > size || (prev.Offset == size && prev.MTime != src.info.ModTime().UnixNano()) || (prev.Offset > 0 && (prev.Head != head || prev.Tail != fingerprint(f, max(0, prev.Offset-64), min(prev.Offset, 64)))) {
 		next = Cursor{Revision: Revision}
 	}
 	next.Head = head
+	next.FileID = fileID(src.info)
 	next.Size = size
 	next.MTime = src.info.ModTime().UnixNano()
 	if _, err = f.Seek(next.Offset, io.SeekStart); err != nil {

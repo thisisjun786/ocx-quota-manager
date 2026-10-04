@@ -127,6 +127,11 @@ func TestNativeUnknownAndProxyStaySeparate(t *testing.T) {
 	if !json.Valid(raw) {
 		t.Fatal("invalid snapshot")
 	}
+	if path := os.Getenv("QUOTA_NATIVE_SNAPSHOT"); path != "" {
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestNativeCollectionSurvivesMalformedOCXConfig(t *testing.T) {

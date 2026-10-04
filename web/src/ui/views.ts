@@ -910,7 +910,7 @@ export function costsView(ctx: UiContext): HTMLElement {
     grid.append(rankTable('제공자별', period.providers, r => names.get(r.provider) ?? r.name, colour, true),
       rankTable('모델별', period.models.slice(0, 12), r => r.name, colour, false),
       rankTable('계정별', period.accounts.slice(0, 12), r => `${names.get(r.provider) ?? r.provider} · ${r.name}`, colour, false));
-    if (unattributed) grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: OpenCodex가 계정 표시 없이 기록한 호출입니다(직접 로그인·기본 계정 경로). 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
+    if (unattributed) grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: 사용 기록에서 계정을 확인할 수 없는 호출입니다. 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
     section.append(grid);
   }
   section.append(node('p', 'sub-note', 'API 환산액은 실제 청구액이 아니며, 기록된 토큰에 모델별 API 단가를 곱한 참고값입니다. 제공자 가격표나 공개 카탈로그(models.dev)에 없는 모델은 단가 미확인, 토큰 수를 보고하지 않은 호출은 토큰 미보고로 합계에서 빠집니다.'));
