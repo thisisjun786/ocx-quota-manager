@@ -166,7 +166,7 @@ func mergeNative(old, next nativeusage.Event) nativeusage.Event {
 			// observation reproducing the entire legacy vector proves which
 			// enum belongs to it. A partial clone cannot authorize subtraction.
 			if old.Evidence != "antigravity-generation" || next.Evidence != old.Evidence || old.Route != nativeusage.Direct || next.Route != old.Route ||
-				next.ModelEnum < 0 || next.ModelEnum > old.Input-old.CacheRead-old.CacheWrite {
+				next.ModelEnum < 0 {
 				old.Route, old.Evidence = nativeusage.Conflict, "conflicting-parser-revision"
 				return old
 			}

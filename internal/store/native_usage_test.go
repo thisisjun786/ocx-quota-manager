@@ -83,7 +83,7 @@ func TestAntigravityParserCorrectionPreservesCompletedUsage(t *testing.T) {
 
 func TestAntigravityCorrectionRequiresMatchingLegacyVector(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
-		for _, staleEnum := range []int64{0, 10} {
+		for _, staleEnum := range []int64{0, 10, 101} {
 			old := nativeEvent("matching-legacy")
 			old.Client, old.Provider, old.Evidence = "antigravity", "antigravity", "antigravity-generation"
 			old.Input, old.CacheRead, old.CacheWrite, old.CacheWrite1h = 100, 0, 0, 0
@@ -96,8 +96,10 @@ func TestAntigravityCorrectionRequiresMatchingLegacyVector(t *testing.T) {
 				sequence = []nativeusage.Event{correct, stale}
 			}
 			got := old
-			for _, e := range sequence {
-				got = mergeNative(got, e)
+			for i := 0; i < 2; i++ {
+				for _, e := range sequence {
+					got = mergeNative(got, e)
+				}
 			}
 			if !reflect.DeepEqual(got, correct) {
 				t.Fatalf("reverse=%v enum=%d got=%+v", reverse, staleEnum, got)
