@@ -64,10 +64,32 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_DATA_DIR` | `~/.local/state/quota-monitor` | SQLite history (quota readings and normalized usage) |
 | `OPENCODEX_HOME` | `~/.opencodex` | OpenCodex config and usage log, read only |
 | `QUOTA_CODEX_HOME` | `$CODEX_HOME` or `~/.codex` | Codex account files, read only |
+| `QUOTA_CLAUDE_HOME` | `~/.claude` | Claude account files and local usage transcripts, read only |
+| `QUOTA_GEMINI_HOME` | `$GEMINI_CLI_HOME` or `~/.gemini` | Antigravity CLI/extension conversation databases, read only |
+| `QUOTA_NATIVE_USAGE` | on | `off` disables local Claude Code, Codex and Antigravity usage collection and their cost overlay |
 | `QUOTA_DIRECT_PROVIDERS` | unset | Providers whose quota is also read from the provider itself, for example `openai,anthropic,cursor` |
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |
 | `QUOTA_CLAUDE_CACHE_TTL`, `QUOTA_CLAUDE_CACHE_FROM` | 5-minute rate | Price Claude cache writes at the 1-hour rate from a given time |
+
+## Local tool usage
+
+Cost analysis also collects local Claude Code, Codex, and Antigravity usage metadata. Collection is
+incremental and bounded; the first backfill runs over several cycles. Tokscale's hourly totals are
+not added to OCX totals because they can contain the same calls and no longer carry request identities.
+
+Only native records with routing evidence enter the combined cost. Claude Code records carrying
+an upstream Anthropic request ID and Antigravity generation records are included. Codex transcripts
+usually lack the request endpoint; `model_provider: openai` also occurs with an OCX base URL, so these
+records are collected separately and excluded from the combined amount. Snapshot warnings and
+`analytics.nativeUsage` show pending counts and their known API-equivalent amount. Missing prices
+remain unknown. This preserves a conservative combined total rather than claiming complete billing.
+
+Native source identities are hashed, repeated/streamed records are reconciled, and conflicting
+evidence stays excluded even after replay. Source transcripts and databases are never changed. Native
+costs remain separate from quota calibration and account estimates; an account is not guessed from
+the currently selected login. Disabling native collection hides its cost overlay but retains history.
+See [the data contract](docs/architecture.md#native-usage-and-costs) for the attribution limits.
 
 ## Security
 

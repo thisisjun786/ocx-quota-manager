@@ -16,14 +16,16 @@ import (
 const failureNote = "수집 작업이 중단되어 마지막 기록을 표시합니다."
 
 type Runtime struct {
-	Clock      clock.Clock
-	Store      store.Store
-	Transport  transport.Transport
-	Interval   time.Duration
-	Direct     []string
-	Home       string
-	CodexHome  string
-	ClaudeHome string
+	Clock         clock.Clock
+	Store         store.Store
+	Transport     transport.Transport
+	Interval      time.Duration
+	Direct        []string
+	Home          string
+	CodexHome     string
+	ClaudeHome    string
+	GeminiHome    string
+	NativeEnabled bool
 
 	mu                sync.Mutex
 	published         atomic.Value // contract.Snapshot
@@ -146,7 +148,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	now := rt.Clock.Now().UTC()
 	local, err := (collect.Reader{Home: rt.Home, CodexHome: rt.CodexHome, ClaudeHome: rt.ClaudeHome}).LoadLocal(now)
 	if err != nil {
-		rt.markFailure()
+		rt.markFailureWithNative(ctx, now)
 		return
 	}
 	// An unreadable credential source is not an authoritative empty roster.
@@ -154,7 +156,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials"} {
 		switch local.Files[key] {
 		case collect.FileMalformed, collect.FileUnreadable, collect.FileOversized:
-			rt.markFailure()
+			rt.markFailureWithNative(ctx, now)
 			return
 		}
 	}
@@ -204,6 +206,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		}
 	}
 	usageStatus, ingestErr := rt.ingestUsage(now)
+	nativeStatus, nativeWarnings := rt.collectNative(ctx, now)
 	if ingestErr == nil {
 		if err := MaintainIfDue(rt.Store, now); err != nil {
 			storeFailed = true
@@ -241,13 +244,19 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		previous, _ := rt.published.Load().(contract.Snapshot)
 		analytics, providers = retainAnalysis(previous, providers)
 	}
+	if rt.NativeEnabled {
+		analytics["nativeUsage"] = nativeStatus
+		if err := rt.attachNativeCosts(analytics, providers, now); err != nil {
+			nativeWarnings = append(nativeWarnings, "도구별 비용 집계가 지연되고 있습니다.")
+		}
+	}
 	src := "opencodex-local-snapshot"
 	rt.publish(contract.Snapshot{
 		SchemaVersion:          contract.SchemaVersion,
 		ObservedAt:             &iso,
 		Source:                 &src,
 		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
-		Warnings:               local.Warnings,
+		Warnings:               append(local.Warnings, nativeWarnings...),
 		Providers:              providers,
 		Analytics:              analytics,
 	})

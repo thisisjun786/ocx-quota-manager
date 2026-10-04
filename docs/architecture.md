@@ -89,6 +89,46 @@ the totals. `analytics.costs.daily` is a 30-day series split by provider; its da
 `QUOTA_TZ`, or the process time zone when unset. All amounts are API-equivalent references, never
 charges.
 
+### Native usage and costs
+
+The collector also reads Claude Code `projects/**/*.jsonl` and `transcripts/**/*.jsonl`, Codex
+`sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`, and Antigravity's CLI/IDE-extension
+`conversations/*.db` under the configured homes. It reads metadata only and does not launch a
+tool, run inference, sync an IDE, or write any source file. Antigravity desktop RPC caches are
+not an input. SQLite reads use a consistent read-only transaction including committed WAL data.
+
+`native_usage` stores normalized candidates and valuations separately from OCX `usage`.
+`native_cursors` stores hashed file identities, fingerprints, offsets and parser metadata, committing
+progress with the associated candidates. Stable response/message identities exclude paths, so a copied
+transcript or database cannot add another call. Claude streaming updates may increase a token vector;
+older copies cannot reduce it. Contradictory identities/routes or incomparable counters produce a
+sticky conflict. Codex cumulative token notifications are differenced and repeated notifications ignored.
+Input includes cached tokens; output already includes reasoning. Explicit Claude one-hour cache writes
+are priced at their own rate, independently of OCX's configurable cache assumption.
+
+Attribution is conservative: the current OCX Messages response does not forward Anthropic's
+`request-id` header, whereas Claude Code captures it in assistant `requestId`. An upstream `req_`
+ID is the supported direct-call signal; a `msg_` ID alone is not. Antigravity generation metadata
+identifies its direct service. Codex's provider name, model name, current configuration and similar
+timestamps/token counts do not prove a direct call; records without route proof remain pending.
+Explicit OCX provider/request markers are excluded. These rules assume unmodified local source logs
+and the documented OCX response behavior; they cannot authenticate forged logs or infer historical
+proxy versions. A changed source contract needs a parser revision and bounded replay.
+
+Only included ledger rows join the existing cost analysis. Costs use the current collection time,
+with OCX rows bounded by their last successful read; native rows continue advancing during an OCX
+outage. Quota calibration, account attribution, coverage and usage periods still use OCX rows alone.
+Native account attribution stays unknown. Missing tariffs retain tokens and unknown dollars.
+`analytics.nativeUsage.{claude,codex,antigravity}` reports source status, pending files, invalid/failed
+records and included/pending/proxy/conflict counts, with a pending API-equivalent amount when priced.
+These counts cover retained history, not the selected cost period; warnings explain excluded usage.
+Both confirmed and pending candidates follow the configured history retention/reset boundaries.
+
+Scanning is bounded per source and resumes across collection cycles/restarts. A partial JSONL tail
+is retried, and source errors do not discard previously stored candidates. First-run backfill is
+explicitly incomplete until the backlog is consumed. The old binary ignores the additive native
+tables and still sees the original OCX accounting; no migration of OCX rows is required.
+
 ### Usage periods
 
 `analytics.periods` reports five trailing spans on every provider and account: `oneHour`, `fiveHour`, `twentyFourHour`, `weekly` and `monthly` — 1, 5, 24, 168 and 720 hours. All five end at the same instant, the last usage-log read that finished successfully, and each period carries its own `startedAt`, `endedAt` and `hours`. The boundary is half-open: a call exactly at `startedAt` is outside the period and a call exactly at `endedAt` is inside it. These are instants, never calendar-aligned, so `twentyFourHour` is the last 24 hours rather than today's date, and it does not restart at local midnight. `endedAt` always equals `pace.observedAt`; it equals the snapshot's `usageObservedAt` only when a read timestamp exists and is not ahead of the clock, since the boundary falls back to the caller's clock when no read has been recorded and never moves past it.

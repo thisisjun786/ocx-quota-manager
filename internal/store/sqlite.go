@@ -25,6 +25,7 @@ type History struct {
 	obs        observationCache
 	catalog    *Catalog
 	catalogRev string
+	native     *NativeView
 }
 
 type OpenOptions struct {
@@ -76,6 +77,9 @@ func (h *History) init() error {
 		return err
 	}
 	if _, err := h.db.Exec(schemaSQL); err != nil {
+		return err
+	}
+	if _, err := h.db.Exec(nativeSchema); err != nil {
 		return err
 	}
 	var mode string
@@ -465,6 +469,7 @@ func (h *History) Maintain(now int64) error {
 	cutoff := now - int64(h.retentionDays)*86400000
 	return h.Transact(func(tx *sql.Tx) error {
 		cutoffStmts := []string{
+			"DELETE FROM native_usage WHERE at<?",
 			"DELETE FROM usage_timings WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM cursor_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM claude_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",
