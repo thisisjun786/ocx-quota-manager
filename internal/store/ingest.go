@@ -12,6 +12,10 @@ import (
 	"regexp"
 )
 
+// Replay newly supported prices without reopening settled tariffs. Keep this
+// separate from TariffRevision, whose replay can replace existing amounts.
+const conditionalPriceReplayVersion = "v2-haiku55"
+
 type UsageCursor struct {
 	Ino         string `json:"ino"`
 	Offset      int64  `json:"offset"`
@@ -56,8 +60,8 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 			return 0, err
 		}
 	}
-	// One bounded replay repairs unpriced rows written by the conditional-tariff
-	// regression. Settled amounts remain protected by settleIngest.
+	// One bounded replay fills unknown amounts after source-owned prices are
+	// added. Settled amounts remain protected by settleIngest.
 	replay, _ := h.Meta("conditionalPriceReplay")
 	// tariffRevision names the source-owned tariff generation. A new generation
 	// replays the log once and may replace an amount only when the tariff for
@@ -73,7 +77,7 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 		// again once. settleIngest only fills amounts that are still unknown.
 		replay = nil
 	}
-	if replay != "v1" {
+	if replay != conditionalPriceReplayVersion {
 		cursor.Offset = 0
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return 0, err
@@ -189,7 +193,7 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 		if _, err := tx.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", "usageCursor", string(raw)); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", "conditionalPriceReplay", `"v1"`); err != nil {
+		if _, err := tx.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", "conditionalPriceReplay", `"`+conditionalPriceReplayVersion+`"`); err != nil {
 			return err
 		}
 		if _, err := tx.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", "tariffRevision", `"`+TariffRevision+`"`); err != nil {

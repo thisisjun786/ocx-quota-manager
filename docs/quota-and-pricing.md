@@ -419,3 +419,16 @@ cannot be told apart uses `monthlyUsd: null` with `basis: "ambiguous"`.
 statuses, negative rates, priced rows without input and output rates, and malformed dates. Stored
 amounts are not recalculated automatically: to re-price history for a changed model, bump
 `TariffRevision` and add the model to `repricedModels` in `internal/store/tariff_revision.go`.
+
+Claude Haiku 5.5 (`claude-haiku-5-5`) has a source-owned standard-tier tariff, checked
+2026-10-08 against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+For prompts up to 100,000 tokens, input/output/cache-read/5-minute cache-write rates are
+$0.10/$0.50/$0.01/$0.125 per million tokens; above 100,000 they are
+$0.50/$2.50/$0.05/$0.625. The threshold includes cached reads and writes, but excludes
+output. One-hour cache writes cost $0.20 or $1 per million tokens, respectively, using
+the existing cache-duration calculation. Unverified service tiers remain unpriced.
+
+Adding this tariff advances `conditionalPriceReplayVersion` in `internal/store/ingest.go`
+to fill unknown OCX amounts from retained source logs once. This does not advance
+`TariffRevision` or reopen settled amounts. Native Claude records with unknown prices
+use the existing paged retry. Previously excluded or expired records remain excluded.
