@@ -166,6 +166,7 @@ func (rt *Runtime) attachNativeCosts(analytics map[string]any, providers []contr
 			rows = append(rows, r)
 		}
 	}
+	rows = applyOllamaCacheAssumption(rows)
 	prices, _ := priceUsage(rows, evidence, now.UnixMilli())
 	for _, r := range view.Rows {
 		rows = append(rows, r)

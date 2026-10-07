@@ -386,7 +386,7 @@ Active refresh ownership is exclusive per provider:
 | Cursor | Direct period usage |5m, account/endpoint backoff|
 | xAI | Direct credits and billing (distinct endpoints) |5m, account/endpoint backoff|
 | Command Code, OpenCode Go | Destination-checked direct reader |5m, account/endpoint backoff|
-| Ollama Cloud | Dedicated usage reader, independent keys |5m|
+| Ollama Cloud | Dedicated balance reader, independent keys |5m|
 | Devin | Direct GetUserStatus using existing OCX login; weekly and visible daily quota |5m + backoff|
 | Google (Gemini API key), Devin CLI without direct ownership | Passive usage logs/cache; no supported OCX quota reader | No forced quota calls |
 | Other enabled providers, or direct-off providers | Separate OpenCodex management reader per provider |120s|
@@ -432,3 +432,29 @@ Adding this tariff advances `conditionalPriceReplayVersion` in `internal/store/i
 to fill unknown OCX amounts from retained source logs once. This does not advance
 `TariffRevision` or reopen settled amounts. Native Claude records with unknown prices
 use the existing paged retry. Previously excluded or expired records remain excluded.
+
+### Ollama balance and 90% cache reference
+
+Ollama Cloud quota now comes from `GET https://ollama.com/api/balance` using the
+existing configured API key. Legacy accounts return `included.session` and
+`included.weekly`: `remaining_percent` is already a percentage, and `resets_at`
+is the provider's reset timestamp. Purchased credit dollars are separate and do
+not become a quota percentage. `/api/usage` now serves activity totals rather
+than the old `limits.*.usage` quota fields.
+
+All retained Ollama Cloud token costs use the user-confirmed fixed 90% cached-input
+scenario. The displayed API-equivalent amount is
+`(input * 0.1 * inputRate + input * 0.9 * cacheReadRate + output * outputRate) / 1e6`.
+This applies even when the original cache field is zero; raw token fields, stored
+USD amounts and historical evidence remain unchanged. Summary, period totals,
+cost charts and quota-value analysis share the same projected amounts. The UI
+labels the assumption, and `cacheAssumption.basis` is `user-fixed` with
+`appliedRate: 0.9`. A fixed ratio is not a measured cache hit rate or an invoice.
+
+Reference rates were checked on 2026-10-08 at [Ollama pricing](https://ollama.com/pricing).
+DeepSeek uses peak rates on weekdays from 12:00 inclusive to 18:00 exclusive UTC,
+with off-peak rates otherwise, selected by the original request time. Other
+providers keep their own schedules. Models without a published cached-input
+rate, missing token counts, and records with lost tier/cache-write selectors
+remain unpriced under this scenario. Cursor retains its separate measured
+cross-provider cache reference.

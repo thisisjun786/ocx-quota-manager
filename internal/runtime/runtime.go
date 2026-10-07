@@ -140,6 +140,19 @@ func (rt *Runtime) Start(ctx context.Context) {
 	}()
 }
 
+// ollamaCollectAllowed reports whether a currently usable Ollama Cloud
+// credential needs the balance poll even when the other direct readers are
+// all off. The scheduler still re-checks the full credential contract; this
+// gate only prevents a no-binding cycle from being marked direct.
+func ollamaCollectAllowed(bindings []collect.Binding) bool {
+	for _, b := range bindings {
+		if b.Provider == "ollama-cloud" && b.Enabled && b.Token != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (rt *Runtime) cycle(ctx context.Context) {
 	if !rt.poll.TryLock() {
 		return
@@ -160,9 +173,13 @@ func (rt *Runtime) cycle(ctx context.Context) {
 			return
 		}
 	}
+	direct := append([]string{}, rt.Direct...)
+	if ollamaCollectAllowed(local.Bindings) {
+		direct = append(direct, "ollama-cloud")
+	}
 	var rows []collect.Reading
-	if len(rt.Direct) > 0 {
-		rows = rt.sched.Collect(ctx, local.Bindings, append(append([]string{}, rt.Direct...), "ollama-cloud"))
+	if len(direct) > 0 {
+		rows = rt.sched.Collect(ctx, local.Bindings, direct)
 	}
 	logErrors := rt.sched.LogErrors()
 	epochs, epochErr := rt.bindingEpochs(local.Bindings, now.UnixMilli())
@@ -188,7 +205,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 			storeFailed = true
 		}
 	}
-	if len(rt.Direct) > 0 {
+	if len(direct) > 0 {
 		outcomes := rt.sched.Outcomes()
 		attachDirectStatus(providers, outcomes, now)
 		if err := rt.persistDirectOutcomes(outcomes); err != nil {

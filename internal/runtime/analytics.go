@@ -95,6 +95,7 @@ func loadAnalysisInput(providers []contract.Provider, hist usageStore, now time.
 			return nil, fmt.Errorf("read price evidence: %w", err)
 		}
 	}
+	in.usage = applyOllamaCacheAssumption(in.usage)
 	in.priced, in.unknown = priceUsage(in.usage, in.evidence, in.nowMS)
 	in.usageNow = in.nowMS
 	if hist != nil {
@@ -222,6 +223,28 @@ func (in *analysisInput) attachWindowAnalytics(providerID string, a *contract.Ac
 // quote for any configured model that has no stored evidence yet.
 func (in *analysisInput) providerModelPrices(p *contract.Provider) []map[string]any {
 	prices := evidenceFor(p.ID, in.evidence)
+	if p.ID == "ollama-cloud" {
+		// The fixed-cache scenario uses today's source-owned reference tariff.
+		// Stored historical evidence remains available in the evidence view.
+		prices = nil
+		models := append([]string(nil), p.SupportedModels...)
+		for _, u := range in.usage {
+			if u.Provider == p.ID && u.Model != nil {
+				models = append(models, *u.Model)
+			}
+		}
+		seen := map[string]bool{}
+		for _, model := range models {
+			if seen[model] {
+				continue
+			}
+			seen[model] = true
+			if price, ok := store.ModelPriceEvidence(p.ID, model, in.nowMS); ok {
+				prices = append(prices, evidenceItem(price))
+			}
+		}
+		return prices
+	}
 	for _, model := range p.SupportedModels {
 		found := false
 		for _, price := range prices {

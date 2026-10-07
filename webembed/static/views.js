@@ -317,7 +317,7 @@ export function accountView(provider, a, selectedPeriod, changePeriod) {
         const tokens = node('div', 'metrics');
         tokens.append(metric('입력 토큰', count.format(usage.inputTokens)), metric('출력 토큰', count.format(usage.outputTokens)), metric('캐시 읽기', count.format(usage.cachedTokens), '입력 토큰에 포함'));
         if (usage.cacheEstimatedRequests)
-            tokens.append(metric('추정 캐시 읽기', count.format(usage.estimatedCachedTokens), '미보고 입력에 평균 비율 적용'));
+            tokens.append(metric('추정 캐시 읽기', count.format(usage.estimatedCachedTokens), provider.id === 'ollama-cloud' ? '전체 입력의 90% 가정' : '미보고 입력에 평균 비율 적용'));
         details.append(tokens);
         details.append(node('p', 'sub-note', `${selectedLabel} ${count.format(usage.requests)}회 호출 · 가격 확인 ${percent.format(coverage(usage) * 100)}%` + spanNote));
         // 행에서 뺀 근거가 여기 모인다. '회 호출' 은 쓰지 않는다 — 위의 호출 줄을 찾는 검사가 있다.
@@ -401,7 +401,9 @@ export function providerAnalytics(p, ctx) {
         const stats = periods?.[ctx.selectedPeriod];
         const applied = num(cache.appliedRate);
         const note = finite(applied)
-            ? `캐시 ${percent.format(applied * 100)}% 가정 · Ollama와 같은 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
+            ? cache.basis === 'user-fixed'
+                ? `캐시 ${percent.format(applied * 100)}% 고정 가정 · 모든 모델의 전체 입력에 적용한 추정 비용입니다. 실제 캐시 사용률은 아닙니다.`
+                : `캐시 ${percent.format(applied * 100)}% 가정 · 다른 제공자의 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
             : '캐시 평균을 계산할 실측 자료가 없어 캐시 할인을 적용하지 않았습니다.';
         wrap.append(node('p', 'sub-note', note));
         if (stats?.cacheEstimatedRequests)
@@ -999,6 +1001,8 @@ export function costsView(ctx) {
         section.append(grid);
     }
     section.append(node('p', 'sub-note', 'API 환산액은 실제 청구액이 아니며, 기록된 토큰에 모델별 API 단가를 곱한 참고값입니다. 제공자 가격표나 공개 카탈로그(models.dev)에 없는 모델은 단가 미확인, 토큰 수를 보고하지 않은 호출은 토큰 미보고로 합계에서 빠집니다.'));
+    if (period?.providers.some(p => p.provider === 'ollama-cloud'))
+        section.append(node('p', 'sub-note', 'Ollama Cloud는 전체 입력의 캐시 90%를 가정한 추정 비용입니다. 캐시 토큰 표시는 실제 기록을 유지합니다.'));
     return section;
 }
 function amounts(value) {

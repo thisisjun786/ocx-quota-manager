@@ -176,7 +176,7 @@ variable, and with it unset the list is empty and nothing is fetched or publishe
 sees `directQuota: null` can trace the reason rather than guessing, and turning direct collection on
 is a unit change followed by a restart — not something that happens on its own when the code lands.
 
-**Other network paths exist regardless.** With adapters off, the Ollama usage probe and the
+**Other network paths exist regardless.** With adapters off, the Ollama balance probe and the
 OpenCodex management refresh still reach out when they are configured. "Direct collection is off"
 does not mean "this service makes no outbound requests".
 
