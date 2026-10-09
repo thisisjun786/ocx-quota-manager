@@ -46,6 +46,14 @@ type NativeView struct {
 	Rows         []Usage
 	Summary      map[string]NativeSummary
 	ClaudePolicy *ClaudeRoutePolicy
+	// Excluded lists the pending and conflicting candidates (not OCX-routed
+	// ones) by client and time, so a cost period can say how many it left out.
+	Excluded []NativeExcluded
+}
+
+type NativeExcluded struct {
+	Client string
+	At     int64
 }
 
 // ClaudeRoutePolicy is the operator's statement that, from From until Until
@@ -520,9 +528,11 @@ func (h *History) NativeUsage() (NativeView, error) {
 		case nativeusage.Conflict:
 			s.Conflicts++
 			s.ConflictByReason[evidence]++
+			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
 		default:
 			s.Pending++
 			s.PendingByReason[evidence]++
+			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
 			if usd != nil {
 				total := *usd
 				if s.PendingUSD != nil {

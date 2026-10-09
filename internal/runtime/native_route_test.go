@@ -95,7 +95,7 @@ func TestClaudeRoutePolicyCountsWindowOnce(t *testing.T) {
 	if s.Included != 1 || s.Proxy != 0 || s.Pending != 1 || !reflect.DeepEqual(s.PendingByReason, map[string]int{"request-id-absent": 1}) {
 		t.Fatalf("%+v", s.NativeSummary)
 	}
-	want := "Claude Code 기록 1건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다(요청 ID 없음 1건)."
+	want := "Claude Code 기록 1건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다(요청 ID 없음 1건). OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."
 	if w := rt.Snapshot().Warnings; len(w) != 1 || w[0] != want {
 		t.Fatal(w)
 	}
@@ -138,15 +138,15 @@ func TestNativeExclusionWarnings(t *testing.T) {
 	}{
 		{store.NativeSummary{Proxy: 4, ProxyByEvidence: map[string]int{"ocx-request-marker": 4}}, nil},
 		{store.NativeSummary{Pending: 6, PendingByReason: map[string]int{"request-id-absent": 3, "request-id-unrecognized": 1, "route-unverified": 2}},
-			[]string{"Claude Code 기록 6건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다(요청 ID 없음 3건, 알 수 없는 요청 ID 1건, 재확인 대기 2건)."}},
+			[]string{"Claude Code 기록 6건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다(요청 ID 없음 3건, 알 수 없는 요청 ID 1건, 재확인 대기 2건). OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."}},
 		{store.NativeSummary{Pending: 3, PendingByReason: map[string]int{"route-unverified": 1, "antigravity-unknown": 2}},
-			[]string{"Claude Code 기록 3건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다(재확인 대기 1건, 기타 2건)."}},
+			[]string{"Claude Code 기록 3건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다(재확인 대기 1건, 기타 2건). OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."}},
 		{store.NativeSummary{Conflicts: 2, ConflictByReason: map[string]int{"conflicting-source": 2}},
-			[]string{"Claude Code 기록 2건은 같은 호출의 출처 정보가 서로 달라 비용에서 제외했습니다."}},
+			[]string{"Claude Code 기록 2건(보존 기간 전체)은 같은 호출의 출처 정보가 서로 달라 대화 기록으로는 비용에 더하지 않았습니다. OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."}},
 		{store.NativeSummary{Pending: 1, Conflicts: 1, PendingByReason: map[string]int{"request-id-unrecognized": 1}},
-			[]string{"Claude Code 기록 1건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다(알 수 없는 요청 ID 1건).", "Claude Code 기록 1건은 같은 호출의 출처 정보가 서로 달라 비용에서 제외했습니다."}},
+			[]string{"Claude Code 기록 1건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다(알 수 없는 요청 ID 1건). OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다.", "Claude Code 기록 1건(보존 기간 전체)은 같은 호출의 출처 정보가 서로 달라 대화 기록으로는 비용에 더하지 않았습니다. OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."}},
 	} {
-		got := nativeExclusionWarnings("Claude Code", tc.s)
+		got := nativeExclusionWarnings("Claude Code", tc.s, true)
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%+v\n got %q\nwant %q", tc.s, got, tc.want)
 		}
@@ -155,5 +155,38 @@ func TestNativeExclusionWarnings(t *testing.T) {
 				t.Fatal("legacy warning", w)
 			}
 		}
+	}
+}
+
+func TestCostPeriodsCountExcludedNativeRecords(t *testing.T) {
+	now := int64(1800000000000)
+	costs := costBreakdown(nil, nil, nil, now, time.UTC)
+	hour := int64(3600000)
+	annotateNativeExcluded(costs, []store.NativeExcluded{
+		{Client: "claude", At: now - 40*24*hour}, // outside every period
+		{Client: "claude", At: now - 20*24*hour},
+		{Client: "claude", At: now - 3*24*hour},
+		{Client: "claude", At: now - hour},
+		{Client: "antigravity", At: now - hour},
+		{Client: "claude", At: now - 24*hour}, // the day's boundary is exclusive, as for costs
+	}, now)
+	periods := costs["periods"].(map[string]any)
+	for key, want := range map[string]map[string]int{
+		"day":   {"claude": 1, "antigravity": 1},
+		"week":  {"claude": 3, "antigravity": 1},
+		"month": {"claude": 4, "antigravity": 1},
+	} {
+		if got := periods[key].(costPeriod).NativeExcluded; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %v want %v", key, got, want)
+		}
+	}
+	raw, _ := json.Marshal(costs["periods"])
+	if !strings.Contains(string(raw), `"nativeExcluded":{"antigravity":1,"claude":1}`) {
+		t.Fatal(string(raw))
+	}
+	// Without native collection the field is absent.
+	plain, _ := json.Marshal(costBreakdown(nil, nil, nil, now, time.UTC)["periods"])
+	if strings.Contains(string(plain), "nativeExcluded") {
+		t.Fatal(string(plain))
 	}
 }

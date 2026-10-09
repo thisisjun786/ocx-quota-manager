@@ -175,7 +175,16 @@ down by evidence value and are always objects. `claude.routePolicy` is `{from, u
 These counts cover retained history, not the selected cost period. Routine import progress stays in
 the status data. Banners report actual read/format failures, pending records with their counts by
 reason (no request ID, unrecognized request ID, awaiting reread, other), and conflicting records
-separately. OCX-routed records produce no banner.
+separately, and say that the counts cover the retained history. For Claude Code they add that a call
+OCX answered is counted from OCX's usage log instead, which holds its own row for every call it
+answered; that row reaches the total once the log has been collected and priced, and only the
+transcript copy is left out. OCX-routed records produce no banner. A cost period in
+`analytics.costs.periods` carries `nativeExcluded`, the pending and conflicting candidates within
+that period by client (absent when there are none), and the cost screen states them under the
+period's tables. A record without
+any request ID cannot be joined to its OCX row afterwards: OCX's usage log keeps no message ID or
+upstream request ID, and its `conversationId` is a hash of Claude Code's `metadata.user_id`, which
+transcripts do not store.
 Both confirmed and pending candidates follow the configured history retention/reset boundaries.
 
 Scanning is bounded per source and resumes across collection cycles/restarts. A partial JSONL tail

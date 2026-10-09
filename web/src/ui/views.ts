@@ -675,7 +675,7 @@ type AccountWindowRow = {id: string; label: string; remainingPercent: number | n
 type AccountRow = {provider: string; providerName: string; id: string; label: string; plan: string | null; status: string; health: Health; reason: string;
   lowest: AccountWindowRow | null; nextResetAt: string | null; windows: AccountWindowRow[]; day: CostCell; week: CostCell; lastRequestAt: string | null};
 type CostRow = CostCell & {key: string; provider: string; name: string; configured: boolean | null; share: number};
-type CostPeriod = {hours: number; total: CostCell; providers: CostRow[]; models: CostRow[]; accounts: CostRow[]};
+type CostPeriod = {hours: number; total: CostCell; providers: CostRow[]; models: CostRow[]; accounts: CostRow[]; nativeExcluded: Record<string, number>};
 
 const HEALTH_LABEL: Record<Health, string> = {critical:'위험', warning:'주의', ok:'정상', unknown:'확인 불가', idle:'일시 중지'};
 
@@ -718,7 +718,23 @@ function costRows(value: unknown): CostRow[] {
 function costPeriod(value: unknown): CostPeriod | null {
   const o = asRecord(value);
   if (!o) return null;
-  return {hours:n0(o.hours), total:costCell(o.total), providers:costRows(o.providers), models:costRows(o.models), accounts:costRows(o.accounts)};
+  const excluded: Record<string, number> = {};
+  for (const [client, n] of Object.entries(asRecord(o.nativeExcluded) ?? {})) if (typeof n === 'number' && n > 0) excluded[client] = n;
+  return {hours:n0(o.hours), total:costCell(o.total), providers:costRows(o.providers), models:costRows(o.models), accounts:costRows(o.accounts), nativeExcluded:excluded};
+}
+
+/**
+ * What a cost period leaves out of local tool records, in the period the screen shows. A call OCX
+ * answered is counted from OCX's usage log instead, but only as far as that log has been collected
+ * and priced, so the note does not promise it is in the total.
+ */
+export function nativeExcludedNotes(excluded: Record<string, number>): string[] {
+  const notes: string[] = [];
+  const claude = excluded.claude ?? 0;
+  if (claude > 0) notes.push(`이 기간 Claude Code 대화 기록 ${count.format(claude)}건은 직접 호출인지 OCX 경유인지 확인할 근거가 없거나 출처가 엇갈려 대화 기록으로는 더하지 않았습니다. OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계하며, 수집과 가격 확인이 끝난 만큼 위 합계에 반영됩니다.`);
+  const antigravity = excluded.antigravity ?? 0;
+  if (antigravity > 0) notes.push(`이 기간 Antigravity 기록 ${count.format(antigravity)}건은 호출 경로를 확인할 수 없거나 기록 정보가 서로 엇갈려 합계에 더하지 않았습니다.`);
+  return notes;
 }
 
 export function severityOf(remaining: number | null): Health {
@@ -918,6 +934,7 @@ export function costsView(ctx: UiContext): HTMLElement {
     section.append(grid);
   }
   section.append(node('p', 'sub-note', 'API 환산액은 실제 청구액이 아니며, 기록된 토큰에 모델별 API 단가를 곱한 참고값입니다. 제공자 가격표나 공개 카탈로그(models.dev)에 없는 모델은 단가 미확인, 토큰 수를 보고하지 않은 호출은 토큰 미보고로 합계에서 빠집니다.'));
+  for (const note of nativeExcludedNotes(period?.nativeExcluded ?? {})) section.append(node('p', 'sub-note', note));
   if (period?.providers.some(p => p.provider === 'ollama-cloud')) section.append(node('p', 'sub-note', 'Ollama Cloud는 전체 입력의 캐시 90%를 가정한 추정 비용입니다. 캐시 토큰 표시는 실제 기록을 유지합니다.'));
   return section;
 }

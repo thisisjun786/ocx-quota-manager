@@ -81,6 +81,10 @@ type costPeriod struct {
 	Providers []costRow `json:"providers"`
 	Models    []costRow `json:"models"`
 	Accounts  []costRow `json:"accounts"`
+	// NativeExcluded counts, by client, the local tool records in this period that
+	// the total leaves out for missing or contradictory route evidence. Set only
+	// when native usage collection runs.
+	NativeExcluded map[string]int `json:"nativeExcluded,omitempty"`
 }
 
 type costDay struct {

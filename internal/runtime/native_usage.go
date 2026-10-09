@@ -53,9 +53,15 @@ func routePolicyView(p *store.ClaudeRoutePolicy) *routePolicyStatus {
 }
 
 // nativeExclusionWarnings explains why candidates were left out of costs. Proxy rows
-// are OCX's own records and need no explanation.
-func nativeExclusionWarnings(label string, s store.NativeSummary) []string {
+// are OCX's own records and need no explanation. The counts cover the retained
+// history, while the cost screen shows a period, so the text says so; viaOCX adds
+// that a call OCX answered is counted from OCX's usage log instead.
+func nativeExclusionWarnings(label string, s store.NativeSummary, viaOCX bool) []string {
 	var out []string
+	ocxNote := ""
+	if viaOCX {
+		ocxNote = " OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."
+	}
 	if s.Pending > 0 {
 		var reasons []string
 		known := 0
@@ -78,12 +84,34 @@ func nativeExclusionWarnings(label string, s store.NativeSummary) []string {
 		if len(reasons) > 0 {
 			detail = "(" + strings.Join(reasons, ", ") + ")"
 		}
-		out = append(out, fmt.Sprintf("%s 기록 %d건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다%s.", label, s.Pending, detail))
+		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다%s.", label, s.Pending, detail)+ocxNote)
 	}
 	if s.Conflicts > 0 {
-		out = append(out, fmt.Sprintf("%s 기록 %d건은 같은 호출의 출처 정보가 서로 달라 비용에서 제외했습니다.", label, s.Conflicts))
+		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 같은 호출의 출처 정보가 서로 달라 대화 기록으로는 비용에 더하지 않았습니다.", label, s.Conflicts)+ocxNote)
 	}
 	return out
+}
+
+// annotateNativeExcluded counts, per cost period, the native candidates that period
+// leaves out (pending or conflicting route evidence), so the screen can state what
+// its total does not include. OCX-routed candidates are already OCX's rows.
+func annotateNativeExcluded(costs map[string]any, excluded []store.NativeExcluded, now int64) {
+	periods, _ := costs["periods"].(map[string]any)
+	for _, period := range breakdownPeriods {
+		p, ok := periods[period.key].(costPeriod)
+		if !ok {
+			continue
+		}
+		from := now - period.hours*calc.HourMs
+		counts := map[string]int{}
+		for _, e := range excluded {
+			if e.At > from && e.At <= now {
+				counts[e.Client]++
+			}
+		}
+		p.NativeExcluded = counts
+		periods[period.key] = p
+	}
 }
 
 func (rt *Runtime) markFailureWithNative(ctx context.Context, now time.Time) {
@@ -177,7 +205,7 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 		}
 		out[source.Client] = s
 		label := labels[source.Client]
-		warnings = append(warnings, nativeExclusionWarnings(label, s.NativeSummary)...)
+		warnings = append(warnings, nativeExclusionWarnings(label, s.NativeSummary, source.Client == "claude")...)
 		if s.Status == "error" {
 			warnings = append(warnings, label+" 사용량을 읽지 못했습니다.")
 		} else if s.FailedFiles > 0 {
@@ -243,6 +271,8 @@ func (rt *Runtime) attachNativeCosts(analytics map[string]any, providers []contr
 		sortedRows[i] = rows[j]
 		sortedPrices[i] = prices[j]
 	}
-	analytics["costs"] = costBreakdown(sortedRows, sortedPrices, providers, now.UnixMilli(), displayLocation)
+	costs := costBreakdown(sortedRows, sortedPrices, providers, now.UnixMilli(), displayLocation)
+	annotateNativeExcluded(costs, view.Excluded, now.UnixMilli())
+	analytics["costs"] = costs
 	return nil
 }

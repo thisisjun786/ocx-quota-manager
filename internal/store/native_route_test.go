@@ -570,3 +570,42 @@ func TestNativeAliasRuleIsClaudeOnly(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestNativeViewListsOnlyExcludedCandidates(t *testing.T) {
+	h := openTemp(t)
+	base := nativeEvent("x").At
+	ev := func(id string, route nativeusage.Route, evidence string, at int64) nativeusage.Event {
+		e := nativeEvent(id)
+		e.Route, e.Evidence, e.At = route, evidence, at
+		return e
+	}
+	conflict := ev("conflict", nativeusage.Direct, "anthropic-request-header", base+3)
+	fork := conflict
+	fork.Input, fork.Output = conflict.Input+1, conflict.Output-1
+	if err := h.CommitNative("claude", nativeBatch(
+		ev("direct", nativeusage.Direct, "anthropic-request-header", base),
+		ev("marker", nativeusage.Proxy, "ocx-request-marker", base+1),
+		ev("absent", nativeusage.Unknown, "request-id-absent", base+2),
+		conflict, fork,
+	), base+10000); err != nil {
+		t.Fatal(err)
+	}
+	ag := ev("ag", nativeusage.Unknown, "request-id-absent", base+4)
+	ag.Client, ag.Provider = "antigravity", "antigravity"
+	if err := h.CommitNative("antigravity", nativeBatch(ag), base+10000); err != nil {
+		t.Fatal(err)
+	}
+	v, err := h.NativeUsage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []NativeExcluded{{"claude", base + 2}, {"claude", base + 3}, {"antigravity", base + 4}}
+	if !reflect.DeepEqual(v.Excluded, want) {
+		t.Fatalf("%+v", v.Excluded)
+	}
+	// A record the cutover policy attributes to OCX is no longer left out.
+	setRoutePolicy(t, h, base, nil)
+	if v, _ = h.NativeUsage(); !reflect.DeepEqual(v.Excluded, want[1:]) {
+		t.Fatalf("policy %+v", v.Excluded)
+	}
+}
