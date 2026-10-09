@@ -7,8 +7,11 @@ when all of these hold:
 
 - It is committed, and `go vet ./... && go test ./...`, `npm run typecheck` and `npm test` pass on
   that commit with nothing skipped or failing.
-- It is deployed with `scripts/deploy.sh` to the installed `quota-monitor.service`, which snapshots the
-  history database, the unit and the previous release, and restores them when the health check fails.
+- It is deployed with `scripts/deploy.sh` to the installed `quota-monitor.service`. The script copies
+  the history database (SQLite online backup) and the unit into its snapshot directory and records the
+  previous release. When the health check fails it restores only the previous unit and the
+  `releases/current` pointer and restarts; the history database stays in place, and the snapshot copy
+  is kept for a manual recovery.
 - Afterwards the [release check](docs/operations.md#release-check) (installed release, running
   binary and its manifest hash, last collection) is confirmed and reported together with the deployed
   commit and the rollback path.
