@@ -16,7 +16,15 @@ when all of these hold:
   binary and its manifest hash, last collection) is confirmed and reported together with the deployed
   commit and the rollback path.
 
+## Publishing
+
+A change verified as above may be pushed to its own branch on `origin` and opened as a draft pull
+request without asking again. Check the branch and existing pull requests first, keep credentials and
+personal data out of commits and descriptions, and report the pull request and its checks.
+
+## Still requires Jun
+
 Jun's explicit approval is still required for a deployment with failing or skipped checks, for a new
-installation, for changes to authentication, credentials, permissions, network exposure
-(`QUOTA_HOST`, `QUOTA_PORT`, `QUOTA_PUBLIC_ORIGIN`) or other security settings, for anything that
-sends data off this machine, and for changes outside this repository.
+installation, for merging or force-pushing, for changes to authentication, credentials, permissions,
+network exposure (`QUOTA_HOST`, `QUOTA_PORT`, `QUOTA_PUBLIC_ORIGIN`) or other security settings, for
+anything else that sends data off this machine, and for changes outside this repository.
