@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 export const REQUIRED_UI_ASSETS = [
   'app.js', 'format.js', 'quota.js', 'dom.js', 'views.js',
-  'types.js', 'contract.js', 'index.html', 'style.css',
+  'types.js', 'contract.js', 'collection.js', 'collection-data.js', 'index.html', 'style.css',
 ];
 
 export const STATIC_MODULE_ROUTES = [
   '/', '/index.html', '/app.js', '/format.js', '/quota.js', '/dom.js',
-  '/views.js', '/types.js', '/contract.js', '/style.css',
+  '/views.js', '/types.js', '/contract.js', '/collection.js', '/collection-data.js', '/style.css',
 ];
 
 export const EXTENSIONLESS_404 = ['/format', '/quota', '/dom', '/views', '/contract', '/types'];

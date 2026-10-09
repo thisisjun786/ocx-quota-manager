@@ -244,17 +244,17 @@ The web timer, snapshot refresh hint, and server collection interval are 10 seco
 
 ### Claude cache-write retention
 
-`QUOTA_CLAUDE_CACHE_TTL=1h` and `QUOTA_CLAUDE_CACHE_FROM=<ISO instant>` select the one-hour cache-write reference price for `anthropic` calls at or after that instant. The start is inclusive; older calls, `anthropic-apikey`, Cursor-routed Claude and other providers retain their existing valuation. One-hour writes cost 2× base input, compared with 1.25× for five-minute writes ([Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing), checked 2026-09-15). Input, output and cache-read token amounts and rates stay unchanged.
+`QUOTA_CLAUDE_CACHE_TTL=1h` and `QUOTA_CLAUDE_CACHE_FROM=<ISO instant>` select the one-hour cache-write reference price for `anthropic` and `anthropic-native` calls at or after that instant. The start is inclusive; older calls, `anthropic-apikey`, Cursor-routed Claude and other providers retain their existing valuation. One-hour writes cost 2× base input, compared with 1.25× for five-minute writes ([Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing), checked 2026-09-15). Input, output and cache-read token amounts and rates stay unchanged.
 
 The setting is a user assumption because OCX's normalized log does not retain cache TTL. `anthropic.analytics.cacheWriteAssumption` exposes its TTL, start and basis; current model price quotes use the same setting after the start. Missing settings retain the five-minute default. Invalid TTL values and a one-hour setting without a valid start fail startup rather than silently choosing a different valuation. Set `5m` or remove the settings and restart to restore the original amounts.
 
-`claude_cache_costs` stores each eligible call's five-minute and one-hour reference amounts plus cache-write token count. The normal pricing revision replay backfills these coefficients from retained raw logs, matching the existing row's identity, tokens and base amount. `usage_valued` applies the setting when reading statistics; it never overwrites the original `usage.usd`, tokens or attribution. Replaying or restarting does not duplicate calls. A row whose raw record is unavailable or does not match retains its original amount; a configured setting alone does not prove every retained call was revalued. Wait for pricing replay completion and verify matched row coverage before comparing amounts. Sidecar rows expire with their usage rows, and history-reset exclusions still apply. The previous release can read the same database and ignores the added table.
+`claude_cache_costs` stores each eligible call's five-minute and one-hour reference amounts plus cache-write token count. The normal pricing revision replay backfills these coefficients from retained raw logs, matching the existing row's identity, tokens and base amount. Fill-only replays (a catalog change or a new conditional price version) add coefficients only to rows they create or fill, so they never change a settled row's valuation. `usage_valued` applies the setting when reading statistics; it never overwrites the original `usage.usd`, tokens or attribution. Replaying or restarting does not duplicate calls. A row whose raw record is unavailable or does not match retains its original amount; a configured setting alone does not prove every retained call was revalued. Wait for pricing replay completion and verify matched row coverage before comparing amounts. Sidecar rows expire with their usage rows, and history-reset exclusions still apply. The previous release can read the same database and ignores the added table.
 
 ### Price evidence (2026-09-09, Ollama rechecked 2026-09-10)
 
 Public subscription sources: [ChatGPT Pro tiers](https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro), [Claude Max tiers](https://support.claude.com/en/articles/11049741-what-is-the-max-plan), [Cursor](https://cursor.com/pricing), [Ollama](https://ollama.com/pricing), [Grok](https://x.ai/pricing). Without a user-confirmed override, ChatGPT's stored `pro` label cannot distinguish tiers, and Claude Max also requires an exact detected tier. A published service price does not prove an account's plan.
 
-API reference sources: [OpenAI](https://developers.openai.com/api/docs/pricing), [Claude](https://platform.claude.com/docs/en/about-claude/pricing), [xAI](https://docs.x.ai/developers/pricing). For the current GPT-6/GPT-5.6 reference rows, OpenAI prompt sizes above 272k use their long-context price; xAI at or above 200k uses its long-context price. Known confirmed service tiers are included; unsupported tier combinations remain unpriced. Cached input is included in input, reasoning is included in output, and neither is added twice. Claude cache writes default to the 5-minute price as an explicit estimate because normalized usage does not retain cache TTL. The time-bounded [Claude cache setting](#claude-cache-write-retention) can apply the 1-hour price to attributed `anthropic` usage. Gemini 3.8 Flash uses the exact installed OpenCodex 2.48.0 expected-price tuple as a **local catalog estimate**; the current official row was not located. GPT-5.4 mini uses its verified base input/cache/output rates; its unsupported long-context, Fast-tier and cache-write cases remain unpriced. Composer 2.5 Fast uses the official Cursor token rates and does not assume a cache-write price. Rates are reference valuations, not reconstructed historical invoices.
+API reference sources: [OpenAI](https://developers.openai.com/api/docs/pricing), [Claude](https://platform.claude.com/docs/en/about-claude/pricing), [xAI](https://docs.x.ai/developers/pricing). For the current GPT-6/GPT-5.6 reference rows, OpenAI prompt sizes above 272k use their long-context price; xAI at or above 200k uses its long-context price. Known confirmed service tiers are included; unsupported tier combinations remain unpriced. Cached input is included in input, reasoning is included in output, and neither is added twice. Claude cache writes default to the 5-minute price as an explicit estimate because normalized usage does not retain cache TTL. The time-bounded [Claude cache setting](#claude-cache-write-retention) can apply the 1-hour price to attributed `anthropic` and `anthropic-native` usage. Gemini 3.8 Flash uses the exact installed OpenCodex 2.48.0 expected-price tuple as a **local catalog estimate**; the current official row was not located. GPT-5.4 mini uses its verified base input/cache/output rates; its unsupported long-context, Fast-tier and cache-write cases remain unpriced. Composer 2.5 Fast uses the official Cursor token rates and does not assume a cache-write price. Rates are reference valuations, not reconstructed historical invoices.
 
 ### New model prices and DeepSeek V4.1 Flash (2026-09-10)
 
@@ -355,7 +355,7 @@ The existing pricing revision replay fills matching previously unpriced records 
 
 ### Ollama legacy GPU quota
 
-The collector polls the configured canonical Ollama `GET /api/usage` every 120 seconds with the existing API key (no inference requests). It persists only allowlisted quota fractions and per-model request counters in the monitor DB. Keys and raw API payloads are never exposed. API-key rotation starts a separate observation series. Session/weekly and migrated monthly windows remain distinct; missing reset timestamps are not invented.
+The collector polls the configured canonical Ollama `GET /api/usage` every five minutes per logical account endpoint with the existing API key (no inference requests). It persists only allowlisted quota fractions and per-model request counters in the monitor DB. Keys and raw API payloads are never exposed. API-key rotation starts a separate observation series. Session/weekly and migrated monthly windows remain distinct; missing reset timestamps are not invented.
 
 Ollama calls retain input/output/cache tokens and latency per request. Published token prices provide a reference valuation, not legacy GPU billing. Existing unpriced Ollama history is replayed once with deduplication to populate reference values and timing records. Old request records are not assigned to the currently active API key.
 
@@ -373,19 +373,21 @@ The configured `google` provider uses a Gemini API key. Its limits are per proje
 
 ### Automatic provider refresh
 
+The current Go runtime uses direct reads with the five-minute per-account endpoint cadence below. The management fallback and worker-lane descriptions in this section describe the earlier collector, not active Go behavior; see [the current data contract](architecture.md#data-contract). In particular, `QUOTA_OPENCODEX_ORIGIN` does not enable a management fallback in the Go runtime.
+
 Set `QUOTA_OPENCODEX_ORIGIN=http://127.0.0.1:10104` to the existing local OpenCodex management listener. Only an explicit HTTP loopback origin is accepted. The monitor reads `admin-api-token` locally, never serves it, and issues GET quota refreshes only for providers without direct ownership, independently at most once every120 seconds. OpenCodex owns provider authentication and token renewal; no login, account selection, or inference endpoint is called.
 
 Active refresh ownership is exclusive per provider:
 
 | Provider | Owner when direct collection is enabled | Cadence |
 |---|---|---|
-| OpenAI | Direct wham usage |120s, account/endpoint backoff|
-| Anthropic | Direct OAuth usage |120s, account/endpoint backoff|
-| Cursor | Direct period usage |120s, account/endpoint backoff|
-| xAI | Direct credits and billing (distinct endpoints) |120s, account/endpoint backoff|
-| Command Code, OpenCode Go | Destination-checked direct reader |120s, account/endpoint backoff|
-| Ollama Cloud | Dedicated usage reader, independent keys |120s|
-| Devin | Direct GetUserStatus using existing OCX login; weekly and visible daily quota |120s + backoff|
+| OpenAI | Direct wham usage |5m, account/endpoint backoff|
+| Anthropic | Direct OAuth usage |5m, account/endpoint backoff|
+| Cursor | Direct period usage |5m, account/endpoint backoff|
+| xAI | Direct credits and billing (distinct endpoints) |5m, account/endpoint backoff|
+| Command Code, OpenCode Go | Destination-checked direct reader |5m, account/endpoint backoff|
+| Ollama Cloud | Dedicated balance reader, independent keys |5m|
+| Devin | Direct GetUserStatus using existing OCX login; weekly and visible daily quota |5m + backoff|
 | Google (Gemini API key), Devin CLI without direct ownership | Passive usage logs/cache; no supported OCX quota reader | No forced quota calls |
 | Other enabled providers, or direct-off providers | Separate OpenCodex management reader per provider |120s|
 
@@ -393,7 +395,7 @@ A direct-owned provider never also receives monitor-triggered OpenCodex forced r
 
 The server main thread reads only its last published snapshot in memory. A background worker owns SQLite, files and provider calls. It publishes retained data before starting network work and runs local ingestion then publishes a completed snapshot on a10second schedule, independently of provider requests. Slow ingestion leaves the previous complete snapshot available. Cold startup returns a collecting response immediately until retained data is ready. A publication failure or more than30 seconds without publication marks the retained response delayed/error; it never makes HTTP await the worker. Per-provider lanes prevent a slow provider from delaying another, and local log ingestion never awaits those lanes. Graceful shutdown drains writes before closing SQLite, with an8second worker termination bound for stuck IO. The explicit `collector.collect()` library call still awaits quota work for deterministic tests/offline recovery; production `start()` uses separate jobs.
 
-Fallback OpenAI management refresh covers every native/pool account, OAuth providers every stored account, and API-key providers the per-key quota API. Anthropic quota normally refreshes every two minutes. A failed request, missing account or unavailable account backs off forced retries for two, four, then at most eight minutes; a healthy sibling does not bypass this delay. A complete successful lookup restores the two-minute cadence. Newer valid account observations can replace an older failed lookup while retries wait. The web reads the monitor every 10 seconds. During a quota refresh, the last completed result stays available until the next result is ready. New configured providers are discovered on each collection. Ollama retains its dedicated probe for model counters. A legacy bare key is matched to OpenCodex's exact key-ID projection, without publishing a key fingerprint. Normalized measurements are persisted in the monitor DB so API-key quotas survive a restart. Failed, missing, expired, or reauth-required responses never acquire a fresh observation timestamp. A transient lookup failure preserves recent measured values and their calculations. Account `status` and window `stale` describe measurement eligibility; optional `account.refresh` separately reports `status` (`ok` or `delayed`), `lastAttemptAt` and `nextAttemptAt` (nullable ISO timestamps). The next-attempt time is a schedule, not a guaranteed completion time. The management response does not expose the upstream error reason, so the dashboard reports lookup delay without claiming every failure is rate limiting. Values older than 15 minutes, future-dated values, elapsed reset windows, paused accounts and reauthentication requirements remain excluded from current calculations. Repeated cache reads never add new observation timestamps or manufactured idle history.
+Fallback OpenAI management refresh covers every native/pool account, OAuth providers every stored account, and API-key providers the per-key quota API. The direct Anthropic quota reader normally refreshes every five minutes per account endpoint; the legacy management fallback described below is not implemented by the current Go runtime. A failed request, missing account or unavailable account backs off forced retries for two, four, then at most eight minutes; a healthy sibling does not bypass this delay. A complete successful lookup restores the two-minute cadence. Newer valid account observations can replace an older failed lookup while retries wait. The web reads the monitor every 10 seconds. During a quota refresh, the last completed result stays available until the next result is ready. New configured providers are discovered on each collection. Ollama retains its dedicated probe for model counters. A legacy bare key is matched to OpenCodex's exact key-ID projection, without publishing a key fingerprint. Normalized measurements are persisted in the monitor DB so API-key quotas survive a restart. Failed, missing, expired, or reauth-required responses never acquire a fresh observation timestamp. A transient lookup failure preserves recent measured values and their calculations. Account `status` and window `stale` describe measurement eligibility; optional `account.refresh` separately reports `status` (`ok` or `delayed`), `lastAttemptAt` and `nextAttemptAt` (nullable ISO timestamps). The next-attempt time is a schedule, not a guaranteed completion time. The management response does not expose the upstream error reason, so the dashboard reports lookup delay without claiming every failure is rate limiting. Values older than 15 minutes, future-dated values, elapsed reset windows, paused accounts and reauthentication requirements remain excluded from current calculations. Repeated cache reads never add new observation timestamps or manufactured idle history.
 
 Dashboard account need uses recorded quota consumption and its weekly/monthly period, independently of API-dollar valuation. Legacy dollar-based API estimates retain their pricing rules.
 
@@ -417,3 +419,52 @@ cannot be told apart uses `monthlyUsd: null` with `basis: "ambiguous"`.
 statuses, negative rates, priced rows without input and output rates, and malformed dates. Stored
 amounts are not recalculated automatically: to re-price history for a changed model, bump
 `TariffRevision` and add the model to `repricedModels` in `internal/store/tariff_revision.go`.
+
+Claude Haiku 5.5 (`claude-haiku-5-5`) has a source-owned standard-tier tariff, checked
+2026-10-08 against [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing).
+For prompts up to 100,000 tokens, input/output/cache-read/5-minute cache-write rates are
+$0.10/$0.50/$0.01/$0.125 per million tokens; above 100,000 they are
+$0.50/$2.50/$0.05/$0.625. The threshold includes cached reads and writes, but excludes
+output. One-hour cache writes cost $0.20 or $1 per million tokens, respectively, using
+the existing cache-duration calculation. Unverified service tiers remain unpriced.
+
+Adding this tariff advances `conditionalPriceReplayVersion` in `internal/store/ingest.go`
+to fill unknown OCX amounts from retained source logs once. This does not advance
+`TariffRevision` or reopen settled amounts. Native Claude records with unknown prices
+use the existing paged retry. Previously excluded or expired records remain excluded.
+
+### Claude Code through OCX (`anthropic-native`)
+
+OCX records Claude Code's own login, relayed through OCX, with provider `anthropic-native`. These are Claude Code calls on the user's own subscription, so they are valued with Anthropic's tariffs: `store.PriceProvider` maps `anthropic-native` to `anthropic` (an exact map, no prefix or pattern rule) at the pricing sites only, namely ingest quoting and repricing, the catalog replay revision, the `usage_valued` Claude cache join, and the read-time rate lookup. The same Haiku 5.5 prompt tiers, catalog fallback, unproven-tier refusal and one-hour cache assumption apply, and price evidence rows keep the tariff's provider `anthropic`.
+
+The stored provider stays `anthropic-native`. It never receives an account, and it stays out of Anthropic quota calibration, capacity, pace and per-account rows; cost breakdown groups it under its own provider key. Provider and model rows state the tariff family with `priceProvider: "anthropic"`. The provider is labelled `Claude Code 로그인 (OCX 경유)` unless the roster names it, and it is neither configured nor a removed provider.
+
+Rows ingested before this valuation existed have no amount. The replay version `v3-anthropic-native` reads the retained log once and fills only those still-unknown rows; settled amounts, their basis, price links and cache coefficients are untouched.
+
+Calls answered by an OCX picker alias (`ocx-claude-*` model names) are valued by the provider and model OCX recorded for them (for example `openai` / `gpt-6.1-sol`). The alias name never selects an Anthropic tariff: an `anthropic` or `anthropic-native` row with an `ocx-` model stays unpriced at ingest, at read time and as a native reference amount, even when a catalog or evidence row carries the alias name.
+
+### Ollama balance and 90% cache reference
+
+Ollama Cloud quota now comes from `GET https://ollama.com/api/balance` using the
+existing configured API key. Legacy accounts return `included.session` and
+`included.weekly`: `remaining_percent` is already a percentage, and `resets_at`
+is the provider's reset timestamp. Purchased credit dollars are separate and do
+not become a quota percentage. `/api/usage` now serves activity totals rather
+than the old `limits.*.usage` quota fields.
+
+All retained Ollama Cloud token costs use the user-confirmed fixed 90% cached-input
+scenario. The displayed API-equivalent amount is
+`(input * 0.1 * inputRate + input * 0.9 * cacheReadRate + output * outputRate) / 1e6`.
+This applies even when the original cache field is zero; raw token fields, stored
+USD amounts and historical evidence remain unchanged. Summary, period totals,
+cost charts and quota-value analysis share the same projected amounts. The UI
+labels the assumption, and `cacheAssumption.basis` is `user-fixed` with
+`appliedRate: 0.9`. A fixed ratio is not a measured cache hit rate or an invoice.
+
+Reference rates were checked on 2026-10-08 at [Ollama pricing](https://ollama.com/pricing).
+DeepSeek uses peak rates on weekdays from 12:00 inclusive to 18:00 exclusive UTC,
+with off-peak rates otherwise, selected by the original request time. Other
+providers keep their own schedules. Models without a published cached-input
+rate, missing token counts, and records with lost tier/cache-write selectors
+remain unpriced under this scenario. Cursor retains its separate measured
+cross-provider cache reference.

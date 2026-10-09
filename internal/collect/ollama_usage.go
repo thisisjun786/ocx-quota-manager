@@ -1,35 +1,47 @@
 package collect
 
+import "math"
+
+// Ollama Cloud publishes its included-quota windows on /api/balance, which
+// reads with the same Bearer API key as the retired /api/usage surface.
+// remaining_percent is the provider-reported remaining share in [0,100]; the
+// used side and the stored fraction are derived only from it. The purchased
+// USD balance on the same response is a separate credit quantity and never
+// becomes a percentage window. Per-model request counters do not exist on
+// this surface, so none are fabricated.
 func ollamaAdapter() Adapter {
-	return adapter{"ollama-cloud", "usage", "ollama.com", "/api/usage", "GET", parseOllama}
+	return adapter{"ollama-cloud", "balance", "ollama.com", "/api/balance", "GET", parseOllama}
 }
+
 func parseOllama(body []byte, now int64) ([]Reading, error) {
-	obj, err := parseObject(body)
+	objBody, err := parseObject(body)
 	if err != nil {
-		return nil, err
+		return parserResult(nil, err, "ollama-cloud", "balance", now)
 	}
-	limits, _ := obj["limits"].(map[string]any)
-	out := []Reading{}
-	for _, w := range [][3]string{{"session", "five-hour", "5시간"}, {"weekly", "weekly", "주간"}, {"monthly", "monthly", "월간"}} {
-		v, _ := limits[w[0]].(map[string]any)
-		fraction := num(v["usage"])
-		if fraction == nil || *fraction < 0 {
+	included := obj(objBody["included"])
+	rows := []Reading{}
+	if included == nil {
+		return parserResult(rows, nil, "ollama-cloud", "balance", now)
+	}
+	for _, w := range []struct{ key, id, label string }{
+		{"session", "five-hour", "5시간"},
+		{"weekly", "weekly", "주간"},
+	} {
+		window := obj(included[w.key])
+		if window == nil {
 			continue
 		}
-		used := *fraction * 100
-		models := map[string]int64{}
-		list, _ := v["models"].([]any)
-		for _, item := range list {
-			m, _ := item.(map[string]any)
-			name, _ := m["name"].(string)
-			count := num(m["request_count"])
-			if name == "" || len(name) > 200 || count == nil || *count < 0 || *count != float64(int64(*count)) {
-				continue
-			}
-			models[name] = int64(*count)
+		// A share outside [0,100] is malformed, not a window at a boundary;
+		// percent 0 (fully used) is published like any other in-range value.
+		remaining := num(window["remaining_percent"])
+		if remaining == nil || *remaining < 0 || *remaining > 100 || math.IsNaN(*remaining) || math.IsInf(*remaining, 0) {
+			continue
 		}
-		f := *fraction
-		out = append(out, Reading{Provider: "ollama-cloud", Endpoint: "usage", WindowID: w[1], Label: w[2], UsedPercent: &used, RemainingPercent: remain(&used), Kind: WindowOK, ObservedAt: now, ModelRequests: models, Fraction: &f})
+		used := 100 - *remaining
+		fraction := used / 100
+		rows = append(rows, Reading{Provider: "ollama-cloud", Endpoint: "balance",
+			WindowID: w.id, Label: w.label, UsedPercent: &used, RemainingPercent: remaining,
+			ResetAt: instant(window["resets_at"]), Kind: WindowOK, ObservedAt: now, Fraction: &fraction})
 	}
-	return out, nil
+	return parserResult(rows, nil, "ollama-cloud", "balance", now)
 }

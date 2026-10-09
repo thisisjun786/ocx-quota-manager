@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/contract"
 	_ "modernc.org/sqlite"
@@ -25,6 +26,7 @@ type History struct {
 	obs        observationCache
 	catalog    *Catalog
 	catalogRev string
+	native     *NativeView
 }
 
 type OpenOptions struct {
@@ -76,6 +78,12 @@ func (h *History) init() error {
 		return err
 	}
 	if _, err := h.db.Exec(schemaSQL); err != nil {
+		return err
+	}
+	if _, err := h.db.Exec(nativeSchema); err != nil {
+		return err
+	}
+	if err := h.settleNativeCosts(time.Now().UnixMilli()); err != nil {
 		return err
 	}
 	var mode string
@@ -143,6 +151,11 @@ func (h *History) SetMeta(key string, value any) error {
 	_, err = h.db.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", key, string(raw))
 	if key == "claudeCacheAssumption" || key == "cursorCacheReference" {
 		h.invalidateUsage()
+	}
+	if key == ClaudeRoutePolicyKey {
+		h.cacheMu.Lock()
+		h.native = nil
+		h.cacheMu.Unlock()
 	}
 	return err
 }
@@ -465,6 +478,8 @@ func (h *History) Maintain(now int64) error {
 	cutoff := now - int64(h.retentionDays)*86400000
 	return h.Transact(func(tx *sql.Tx) error {
 		cutoffStmts := []string{
+			"DELETE FROM native_usage WHERE at<?",
+			"DELETE FROM native_settled WHERE at<?",
 			"DELETE FROM usage_timings WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM cursor_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM claude_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",
@@ -473,6 +488,9 @@ func (h *History) Maintain(now int64) error {
 			"DELETE FROM quota_observations WHERE at<?",
 			"DELETE FROM identity_epochs WHERE endedAt IS NOT NULL AND endedAt<?",
 			"DELETE FROM ollama_observations WHERE at<?",
+		}
+		if _, err := tx.Exec("DELETE FROM collection_logs WHERE startedAt<?", now-30*86400000); err != nil {
+			return err
 		}
 		for _, s := range cutoffStmts {
 			if _, err := tx.Exec(s, cutoff); err != nil {

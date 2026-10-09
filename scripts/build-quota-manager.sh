@@ -13,7 +13,7 @@ bin_hash="$(sha256sum dist/quota-manager | awk '{print $1}')"
 python3 - <<PY
 import hashlib, json, os, pathlib
 root = pathlib.Path("$root")
-required = ["app.js", "format.js", "quota.js", "dom.js", "views.js", "types.js", "contract.js", "index.html", "style.css"]
+required = ["app.js", "format.js", "quota.js", "dom.js", "views.js", "types.js", "contract.js", "collection.js", "collection-data.js", "index.html", "style.css"]
 assets = {}
 for name in required:
     p = root / "webembed/static" / name
@@ -44,7 +44,7 @@ m = json.loads(pathlib.Path("dist/quota-manager.manifest.json").read_text())
 actual = hashlib.sha256(pathlib.Path("dist/quota-manager").read_bytes()).hexdigest()
 if actual != m["binarySha256"]:
     raise SystemExit("manifest binary hash mismatch")
-required = ["app.js", "format.js", "quota.js", "dom.js", "views.js", "types.js", "contract.js", "index.html", "style.css"]
+required = ["app.js", "format.js", "quota.js", "dom.js", "views.js", "types.js", "contract.js", "collection.js", "collection-data.js", "index.html", "style.css"]
 for name in required:
     want = m["assetSha256"].get(name)
     if not want:

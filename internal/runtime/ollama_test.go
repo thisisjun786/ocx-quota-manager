@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/calc"
+	"github.com/thisisjun786/ocx-quota-manager/internal/contract"
 	"github.com/thisisjun786/ocx-quota-manager/internal/store"
 )
 
@@ -66,5 +67,58 @@ func TestCalibrateOllamaRejectsRunWithTokenlessCall(t *testing.T) {
 	rows := []store.Usage{ollamaRow("1", 1*ollamaMin, "glm", f(1000)), ollamaRow("2", 5*ollamaMin, "glm", nil)}
 	if got := calibrateOllama(obs, rows, pricedAt(rows), "session"); len(got) != 0 {
 		t.Fatalf("calibrated a run with an unmeasured call: %+v", got)
+	}
+}
+
+func TestApplyOllamaWindowEstimatesWithoutReset(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	// Five-minute polls (the direct-read cadence) must still form one run.
+	var obs []store.OllamaObservation
+	for i := int64(0); i <= 4; i++ {
+		obs = append(obs, ollamaObs(i*5*ollamaMin, 10+i, 0, 1+float64(i)*0.5))
+	}
+	var rows []store.Usage
+	for i := int64(1); i <= 4; i++ {
+		rows = append(rows, ollamaRow(string(rune('0'+i)), i*5*ollamaMin-1, "glm", f(1000)))
+	}
+	models := calibrateOllama(obs, rows, pricedAt(rows), "session")
+	if len(models) != 1 || models[0].Requests != 4 {
+		t.Fatalf("five-minute cadence did not calibrate: %+v", models)
+	}
+	remaining := 97.0
+	w := contract.Window{ID: "five-hour", Label: "5시간", RemainingPercent: &remaining}
+	now := 20 * ollamaMin
+	applyOllamaWindow(&w, obs, models, "session", now)
+	dto := w.Analytics.(map[string]any)
+	// $0.04 over 2pp -> $2 per 100%.
+	if c, ok := dto["capacityApiUsd"].(float64); !ok || math.Abs(c-2) > 1e-9 {
+		t.Fatalf("capacity %v", dto["capacityApiUsd"])
+	}
+	if r, ok := dto["remainingApiUsd"].(float64); !ok || math.Abs(r-1.94) > 1e-9 {
+		t.Fatalf("remaining %v", dto["remainingApiUsd"])
+	}
+	if dto["capacityBasis"] != "workload-estimate" {
+		t.Fatalf("basis %v", dto["capacityBasis"])
+	}
+	hour := dto["consumptionPeriods"].(map[string]any)[calc.PeriodOneHour].(map[string]any)
+	if d, ok := hour["deltaPp"].(*float64); !ok || d == nil || math.Abs(*d-2) > 1e-9 {
+		t.Fatalf("one-hour delta %v", hour["deltaPp"])
+	}
+	if h := dto["history"].([]map[string]any); len(h) != 5 {
+		t.Fatalf("history %d", len(h))
+	}
+	// 2pp over 20 observed minutes = 6pp/h; 97% lasts ~16h, longer than the 5h window.
+	if r, ok := dto["forecastRatePpHour"].(float64); !ok || math.Abs(r-6) > 1e-9 {
+		t.Fatalf("rate %v", dto["forecastRatePpHour"])
+	}
+	if dto["exhaustsAt"] == nil || dto["resetBeforeExhaustion"] != true || dto["status"] != "ok" {
+		t.Fatalf("forecast %v %v %v", dto["exhaustsAt"], dto["resetBeforeExhaustion"], dto["status"])
+	}
+	// A reading that disagrees with the window on screen gets no ETA.
+	other := 50.0
+	w2 := contract.Window{ID: "five-hour", Label: "5시간", RemainingPercent: &other}
+	applyOllamaWindow(&w2, obs, models, "session", now)
+	if w2.Analytics.(map[string]any)["exhaustsAt"] != nil {
+		t.Fatal("forecast from a mismatched reading")
 	}
 }

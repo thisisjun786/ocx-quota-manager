@@ -70,8 +70,9 @@ func priceUsage(rows []store.Usage, evidence []store.Evidence, _ int64) ([]calc.
 		if u.Cached != nil {
 			line.CacheRead = *u.Cached
 		}
-		rates := selectUsageRate(byModel[priceKey{u.Provider, model}], u.At)
-		if u.Basis != nil && *u.Basis == store.UnknownInputBasis {
+		price := store.PriceProvider(u.Provider)
+		rates := selectUsageRate(byModel[priceKey{price, model}], u.At)
+		if u.Basis != nil && *u.Basis == store.UnknownInputBasis || store.OCXAlias(price, model) {
 			rates = nil
 		}
 		// Missing token counts cannot establish a zero-priced request.

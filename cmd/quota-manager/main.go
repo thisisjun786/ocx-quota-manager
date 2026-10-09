@@ -37,10 +37,16 @@ func main() {
 		_ = hist.Close()
 		log.Fatal(err)
 	}
+	if err := configureClaudeRoute(hist, os.Getenv("QUOTA_CLAUDE_OCX_FROM"), os.Getenv("QUOTA_CLAUDE_OCX_UNTIL")); err != nil {
+		_ = hist.Close()
+		log.Fatal(err)
+	}
 	rt := runtime.New(clock.System{}, hist, collect.NewHTTPSTransport())
 	rt.Home = home
 	rt.CodexHome = env("QUOTA_CODEX_HOME", env("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex")))
 	rt.ClaudeHome = env("QUOTA_CLAUDE_HOME", filepath.Join(os.Getenv("HOME"), ".claude"))
+	rt.NativeEnabled = os.Getenv("QUOTA_NATIVE_USAGE") != "off"
+	rt.GeminiHome = env("QUOTA_GEMINI_HOME", env("GEMINI_CLI_HOME", filepath.Join(os.Getenv("HOME"), ".gemini")))
 	rt.Direct = collect.ParseDirectProviders(os.Getenv("QUOTA_DIRECT_PROVIDERS"))
 	if os.Getenv("QUOTA_PRICE_CATALOG") != "off" {
 		rt.EnableCatalog(data, env("QUOTA_MODEL_CATALOG", filepath.Join(first(os.Getenv("XDG_CACHE_HOME"), filepath.Join(os.Getenv("HOME"), ".cache")), "opencode", "models.json")))
@@ -60,7 +66,7 @@ func main() {
 	}
 	srv, err := httpserver.New(httpserver.Options{
 		Host: host, Port: port, PublicOrigin: os.Getenv("QUOTA_PUBLIC_ORIGIN"),
-		Public: public, Snapshot: rt.Snapshot,
+		Public: public, Snapshot: rt.Snapshot, CollectionLogs: hist.ListCollectionLogs,
 	})
 	if err != nil {
 		log.Fatal(err)

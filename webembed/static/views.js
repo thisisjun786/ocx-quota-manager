@@ -125,7 +125,7 @@ export function subscriptionNote(sub, ratio, basis) {
         (sub.basis === 'user-confirmed' ? ' · 사용자 확인' : '') +
         (finite(ratio) ? ` · 구독료 대비 최근 30일 환산액 약 ${number.format(ratio)}배${['partial', 'lower-bound'].includes(basis ?? '') ? ' (일부 사용)' : ''}` : '');
 }
-export function windowAnalyticsView(w) {
+export function windowAnalyticsView(w, key = w.id) {
     const a = winA(w);
     const prior = !finite(a.capacityApiUsd) ? a.historicalCapacity : null;
     const value = prior?.apiUsd ?? a.capacityApiUsd;
@@ -153,9 +153,56 @@ export function windowAnalyticsView(w) {
     const forecast = metric('소진 예상', eta, a.exhaustsAt && (w.remainingPercent ?? 0) > 0 && (a.forecastObservedHours ?? 0) < 24 ? '초기 추정' : null);
     forecast.title = a.exhaustsAt ? date.format(new Date(a.exhaustsAt)) : a.reason || '계산할 기록 없음';
     grid.append(forecast);
-    return grid;
+    const cycles = prior ? null : capacityCyclesView(a, `cycles:${key}`);
+    if (!cycles)
+        return grid;
+    const wrap = node('div', 'capacity-block');
+    wrap.append(grid, cycles);
+    return wrap;
 }
-export function windowView(account, w) {
+const shortDate = { format(d) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    } };
+const CYCLE_ROWS = 6;
+// One line under the limit; the per-cycle figures stay folded. A cycle's figure is its
+// spend divided by its quota movement: what 100% of the limit cost during that cycle.
+export function capacityCyclesView(a, expandKey) {
+    const cycles = (a.capacityCycles ?? []).filter(c => finite(c.apiUsd) && c.apiUsd > 0);
+    if (cycles.length < 2)
+        return null;
+    const wrap = node('div', 'capacity-cycles');
+    const shift = a.capacityShift;
+    const used = cycles.filter(c => c.selected).length;
+    const range = a.capacityRangeApiUsd;
+    const change = shift && finite(shift.changeRatio) ? ` (${shift.changeRatio > 0 ? '+' : '−'}${count.format(Math.abs(shift.changeRatio) * 100)}%)` : '';
+    wrap.append(node('p', shift ? 'cycle-note shift' : 'cycle-note', shift
+        ? `공급량 변경 감지 · ${shortDate.format(new Date(shift.at))}부터 ≈ ${usd(shift.beforeApiUsd)} → ≈ ${usd(shift.afterApiUsd)}${change}`
+        : `최근 ${count.format(used)}개 주기 평균${range ? ` · 주기마다 ${usd(range.low)}~${usd(range.high)}` : ''}`));
+    const details = node('details', 'cycle-details');
+    details.dataset.expand = expandKey;
+    details.append(node('summary', '', `주기별 한도 추산 ${count.format(cycles.length)}개`));
+    const table = node('table', 'cycle-table');
+    const head = node('tr');
+    for (const label of ['주기 끝', '100% 한도', '소모', ''])
+        head.append(node('th', '', label));
+    table.createTHead().append(head);
+    const body = table.createTBody();
+    const shiftAt = shift ? Date.parse(shift.at) : NaN;
+    const newest = [...cycles].reverse();
+    for (const c of newest.slice(0, CYCLE_ROWS)) {
+        const state = c.selected ? '추산에 사용' : !c.usable ? '소모 적어 제외' : finite(shiftAt) && Date.parse(c.to) < shiftAt ? '변경 전' : '이전 주기';
+        const row = node('tr', c.selected ? 'selected' : '');
+        row.append(node('td', '', shortDate.format(new Date(c.to))), node('td', '', usd(c.apiUsd)), node('td', '', `${quotaFigure(c.matchedDeltaPp ?? c.deltaPp)}%p`), node('td', '', state));
+        body.append(row);
+    }
+    details.append(table);
+    const more = newest.length > CYCLE_ROWS ? `이전 주기 ${count.format(newest.length - CYCLE_ROWS)}개 생략 · ` : '';
+    details.append(node('small', 'cycle-more', `${more}각 주기에 쓴 API 환산액을 그 주기의 쿼타 소모(%p)로 나눠 100% 한도를 계산했습니다.`));
+    wrap.append(details);
+    return wrap;
+}
+export function windowView(account, w, providerId = '') {
     const fresh = freshWindow(account, w);
     const valid = finite(w.remainingPercent) && w.remainingPercent >= 0 && w.remainingPercent <= 100;
     const item = node('div', `window${!fresh ? ' stale' : ''}${valid && (w.remainingPercent ?? 0) < 20 ? ' low' : ''}`);
@@ -185,7 +232,7 @@ export function windowView(account, w) {
             historicalCapacity: winA(w).historicalCapacity ?? null } };
     item.append(quota);
     if (!['paused', 'reauth', 'unavailable'].includes(account.status))
-        item.append(windowAnalyticsView(analytics));
+        item.append(windowAnalyticsView(analytics, `${providerId}:${account.id}:${w.id}`));
     return item;
 }
 export function accountView(provider, a, selectedPeriod, changePeriod) {
@@ -244,7 +291,7 @@ export function accountView(provider, a, selectedPeriod, changePeriod) {
     const primary = a.windows;
     if (primary.length) {
         const windows = node('div', 'windows');
-        primary.forEach(w => windows.append(windowView(a, w)));
+        primary.forEach(w => windows.append(windowView(a, w, provider.id)));
         article.append(windows);
     }
     else
@@ -270,7 +317,7 @@ export function accountView(provider, a, selectedPeriod, changePeriod) {
         const tokens = node('div', 'metrics');
         tokens.append(metric('입력 토큰', count.format(usage.inputTokens)), metric('출력 토큰', count.format(usage.outputTokens)), metric('캐시 읽기', count.format(usage.cachedTokens), '입력 토큰에 포함'));
         if (usage.cacheEstimatedRequests)
-            tokens.append(metric('추정 캐시 읽기', count.format(usage.estimatedCachedTokens), '미보고 입력에 평균 비율 적용'));
+            tokens.append(metric('추정 캐시 읽기', count.format(usage.estimatedCachedTokens), provider.id === 'ollama-cloud' ? '전체 입력의 90% 가정' : '미보고 입력에 평균 비율 적용'));
         details.append(tokens);
         details.append(node('p', 'sub-note', `${selectedLabel} ${count.format(usage.requests)}회 호출 · 가격 확인 ${percent.format(coverage(usage) * 100)}%` + spanNote));
         // 행에서 뺀 근거가 여기 모인다. '회 호출' 은 쓰지 않는다 — 위의 호출 줄을 찾는 검사가 있다.
@@ -354,7 +401,9 @@ export function providerAnalytics(p, ctx) {
         const stats = periods?.[ctx.selectedPeriod];
         const applied = num(cache.appliedRate);
         const note = finite(applied)
-            ? `캐시 ${percent.format(applied * 100)}% 가정 · Ollama와 같은 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
+            ? cache.basis === 'user-fixed'
+                ? `캐시 ${percent.format(applied * 100)}% 고정 가정 · 모든 모델의 전체 입력에 적용한 추정 비용입니다. 실제 캐시 사용률은 아닙니다.`
+                : `캐시 ${percent.format(applied * 100)}% 가정 · 다른 제공자의 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
             : '캐시 평균을 계산할 실측 자료가 없어 캐시 할인을 적용하지 않았습니다.';
         wrap.append(node('p', 'sub-note', note));
         if (stats?.cacheEstimatedRequests)
@@ -736,7 +785,23 @@ function costPeriod(value) {
     const o = asRecord(value);
     if (!o)
         return null;
-    return { hours: n0(o.hours), total: costCell(o.total), providers: costRows(o.providers), models: costRows(o.models), accounts: costRows(o.accounts) };
+    const excluded = {};
+    for (const [client, n] of Object.entries(asRecord(o.nativeExcluded) ?? {}))
+        if (typeof n === 'number' && n > 0)
+            excluded[client] = n;
+    return { hours: n0(o.hours), total: costCell(o.total), providers: costRows(o.providers), models: costRows(o.models), accounts: costRows(o.accounts), nativeExcluded: excluded };
+}
+/**
+ * What a cost period leaves out of local tool records, in the period the screen shows. Only a
+ * client whose transcripts still add to costs (Antigravity) has any; Claude Code costs come from
+ * OCX's usage log, so its transcripts are never listed.
+ */
+export function nativeExcludedNotes(excluded) {
+    const notes = [];
+    const antigravity = excluded.antigravity ?? 0;
+    if (antigravity > 0)
+        notes.push(`이 기간 Antigravity 기록 ${count.format(antigravity)}건은 호출 경로를 확인할 수 없거나 기록 정보가 서로 엇갈려 합계에 더하지 않았습니다.`);
+    return notes;
 }
 export function severityOf(remaining) {
     if (remaining === null)
@@ -942,16 +1007,24 @@ export function costsView(ctx) {
         .sort((a, b) => series.buckets.reduce((s, d) => s + (d.byProvider[b] ?? 0), 0) - series.buckets.reduce((s, d) => s + (d.byProvider[a] ?? 0), 0));
     const colour = providerColours(providerOrder);
     const names = new Map((ctx.snapshot?.providers ?? []).map(p => [p.id, p.name]));
+    // A provider the roster does not name (anthropic-native) keeps the server's label in the chart and every table.
+    for (const r of period?.providers ?? [])
+        if (!names.has(r.provider))
+            names.set(r.provider, r.name);
     if (series.buckets.length)
         section.append(bucketChart(series, providerOrder, colour, names, label));
     if (period) {
         const grid = node('div', 'cost-grid');
         grid.append(rankTable('제공자별', period.providers, r => names.get(r.provider) ?? r.name, colour, true), rankTable('모델별', period.models.slice(0, 12), r => r.name, colour, false), rankTable('계정별', period.accounts.slice(0, 12), r => `${names.get(r.provider) ?? r.provider} · ${r.name}`, colour, false));
         if (unattributed)
-            grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: OpenCodex가 계정 표시 없이 기록한 호출입니다(직접 로그인·기본 계정 경로). 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
+            grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: 사용 기록에서 계정을 확인할 수 없는 호출입니다. 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
         section.append(grid);
     }
     section.append(node('p', 'sub-note', 'API 환산액은 실제 청구액이 아니며, 기록된 토큰에 모델별 API 단가를 곱한 참고값입니다. 제공자 가격표나 공개 카탈로그(models.dev)에 없는 모델은 단가 미확인, 토큰 수를 보고하지 않은 호출은 토큰 미보고로 합계에서 빠집니다.'));
+    for (const note of nativeExcludedNotes(period?.nativeExcluded ?? {}))
+        section.append(node('p', 'sub-note', note));
+    if (period?.providers.some(p => p.provider === 'ollama-cloud'))
+        section.append(node('p', 'sub-note', 'Ollama Cloud는 전체 입력의 캐시 90%를 가정한 추정 비용입니다. 캐시 토큰 표시는 실제 기록을 유지합니다.'));
     return section;
 }
 function amounts(value) {

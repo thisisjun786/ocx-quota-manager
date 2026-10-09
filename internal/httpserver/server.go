@@ -11,32 +11,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thisisjun786/ocx-quota-manager/internal/collect"
 	"github.com/thisisjun786/ocx-quota-manager/internal/contract"
+	"github.com/thisisjun786/ocx-quota-manager/internal/store"
 )
 
 const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 
 var staticFiles = map[string]string{
-	"/":            "index.html",
-	"/index.html":  "index.html",
-	"/app.js":      "app.js",
-	"/format.js":   "format.js",
-	"/quota.js":    "quota.js",
-	"/dom.js":      "dom.js",
-	"/views.js":    "views.js",
-	"/types.js":    "types.js",
-	"/contract.js": "contract.js",
-	"/style.css":   "style.css",
+	"/":              "index.html",
+	"/index.html":    "index.html",
+	"/app.js":        "app.js",
+	"/collection.js": "collection.js",
+	"/collection-data.js": "collection-data.js",
+	"/format.js":     "format.js",
+	"/quota.js":      "quota.js",
+	"/dom.js":        "dom.js",
+	"/views.js":      "views.js",
+	"/types.js":      "types.js",
+	"/contract.js":   "contract.js",
+	"/style.css":     "style.css",
 }
 
 type SnapshotFn func() contract.Snapshot
 
 type Options struct {
-	Host          string
-	Port          int
-	PublicOrigin  string
-	Public        fs.FS
-	Snapshot      SnapshotFn
+	Host           string
+	Port           int
+	PublicOrigin   string
+	Public         fs.FS
+	Snapshot       SnapshotFn
+	CollectionLogs func(store.CollectionLogQuery) (store.CollectionLogsPage, error)
 	// SnapshotAny is a test-only hook that serves a raw JSON value so UI fields
 	// the public DTO does not keep (refresh, directQuota, usedPercent) survive.
 	SnapshotAny func() any
@@ -162,6 +167,46 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, s.opts.Snapshot())
+		return
+	}
+	if route == "/api/v1/collection-logs" {
+		if s.opts.CollectionLogs == nil {
+			writeJSON(w, 503, map[string]string{"error": "collection logs unavailable"})
+			return
+		}
+		params := r.URL.Query()
+		for k := range params {
+			if k != "period" && k != "provider" && k != "account" && k != "result" && k != "before" {
+				writeJSON(w, 400, map[string]string{"error": "invalid filter"})
+				return
+			}
+			if len(params[k]) != 1 {
+				writeJSON(w, 400, map[string]string{"error": "invalid filter"})
+				return
+			}
+		}
+		q := store.CollectionLogQuery{Period: params.Get("period"), Provider: params.Get("provider"), Account: params.Get("account"), Result: params.Get("result"), Now: s.opts.Now().UnixMilli()}
+		if q.Period == "" && !params.Has("period") {
+			q.Period = "24h"
+		}
+		if q.Period != "1h" && q.Period != "24h" && q.Period != "7d" || (params.Has("result") && !collect.ValidResult(q.Result)) {
+			writeJSON(w, 400, map[string]string{"error": "invalid filter"})
+			return
+		}
+		if params.Has("before") {
+			n, err := strconv.ParseInt(params.Get("before"), 10, 64)
+			if err != nil || n <= 0 {
+				writeJSON(w, 400, map[string]string{"error": "invalid before"})
+				return
+			}
+			q.Before = n
+		}
+		page, err := s.opts.CollectionLogs(q)
+		if err != nil {
+			writeJSON(w, 503, map[string]string{"error": "collection logs unavailable"})
+			return
+		}
+		writeJSON(w, 200, page)
 		return
 	}
 	name, ok := staticFiles[route]

@@ -67,7 +67,9 @@ Set `QUOTA_HOST` to your Tailscale IPv4 and `QUOTA_PORT` to an unused port for p
 
 `GET /api/v1/snapshot` returns `schemaVersion: 1`, ISO `observedAt`, `source`, `refreshIntervalSeconds`, `warnings`, and `providers`. Each provider has identity, enabled state, default model, and account rows. Account rows contain masked label, optional plan, selected-account flag, status, measurement timestamp, quota mode, and windows with used/remaining percentages and reset timestamps. `active` means configured selection, not current request traffic. There is no single percentage combining different providers or quota periods. Summary percentages are equal-account averages, not plan-capacity-weighted pools.
 
-The backend reads OpenCodex snapshots without importing its SDK. When `QUOTA_OPENCODEX_ORIGIN` is configured, the collector also makes authenticated, loopback-only `GET` requests to OpenCodex quota endpoints every 10 seconds; it never calls inference, login, or account-selection endpoints. It persists normalized measurements so quota observations, including API-key quota responses, survive a monitor restart. Each account's last observation remains visible. Readings older than 15 minutes, invalid/future timestamps, or past reset times are stale. Missing, expired, or reauthentication-required quotas remain unavailable. All original OpenCodex files remain read-only.
+The Go backend reads local OpenCodex snapshots every 10 seconds without importing its SDK. Enabled direct quota readers call provider endpoints at a five-minute minimum cadence per account endpoint, with failure backoff. Token rotation does not bypass that minimum; a replacement after an authentication failure can recover after the normal cadence rather than inheriting the rejected token's 30-minute delay. It never calls inference, login, or account-selection endpoints. Normalized measurements survive a monitor restart. Readings older than 15 minutes, invalid/future timestamps, or past reset times are stale. Missing, expired, or reauthentication-required quotas remain unavailable. All original OpenCodex files remain read-only.
+
+`GET /api/v1/collection-logs` reads persisted external quota-request attempts, not the snapshot cache. It supports `period=1h|24h|7d` (default `24h`), `provider`, `account`, `result`, and an optional positive `before` row ID for older pages of 100 records. Summary rates use the selected period/provider/account and ignore the result filter. Rows and summaries share one SQLite read transaction with a three-second deadline, including waiting behind collector writes; an unavailable store returns 503. This route never starts collection. The snapshot endpoint remains an in-memory read independent of these queries. Detailed logs expire after 30 days and contain no credentials or raw responses.
 
 The main Codex account uses only identity-bound `mainPolicyQuota` after matching the installed OpenCodex SHA-256 identity scheme to native auth. Configured extra accounts use their own opaque store IDs. Tokens and key hints are never returned. Config and credential files are never served as static assets. Errors use generic messages.
 
@@ -86,6 +88,130 @@ Providers that still have usage but no longer appear in the OCX configuration ar
 the totals. `analytics.costs.daily` is a 30-day series split by provider; its day boundary follows
 `QUOTA_TZ`, or the process time zone when unset. All amounts are API-equivalent references, never
 charges.
+
+### Native usage and costs
+
+The collector also reads Claude Code `projects/**/*.jsonl` and `transcripts/**/*.jsonl`, and Antigravity's CLI/IDE-extension
+`conversations/*.db` under the configured homes. It reads metadata only and does not launch a
+tool, run inference, sync an IDE, or write any source file. Antigravity desktop RPC caches are
+not an input. SQLite reads use a consistent read-only transaction including committed WAL data.
+
+`native_usage` stores normalized candidates and valuations separately from OCX `usage`.
+`native_cursors` stores hashed file identities, fingerprints, offsets and parser metadata, committing
+progress with the associated candidates. Stable response/message identities exclude paths, so a copied
+transcript or database cannot add another call. Claude streaming updates may increase a token vector;
+older copies cannot reduce it. Contradictory identities/routes or incomparable counters produce a
+sticky conflict. A route proven by any snapshot covers every snapshot of the message before counters
+are compared. Snapshots that prove no route and disagree form an unproven conflict that keeps the
+later vector: a later direct proof makes it final, and a later OCX proof settles it as OCX's. OCX-routed records are the exception for counters: a converted OCX stream opens with
+OCX's prompt estimate and ends with the upstream's count, cached input split out, so its snapshots
+need not grow together. Two OCX snapshots of one message keep the later one (more output, then more
+cached input), whatever the merge order. An `ocx-` model proves the route whatever request ID a record
+carried, so every record of that model, including rows stored before the parser knew aliases and rows
+demoted only for their counters, is OCX's. A contradictory source, such as the same message also seen
+with another model, provider or tier, is final in any order. None of these enters costs.
+Antigravity parser revision 2 treats usage field 1 as a model enum, not input tokens,
+and skips model-only metadata. A revision change rereads unchanged databases in bounded batches.
+Only an observation reproducing the complete legacy token vector authorizes subtracting its enum
+once from stored input. The ledger then compares streaming vectors, recalculates the valuation and
+preserves the stable identity. A partial copy cannot authorize the correction.
+The parser revision and enum are retained as provenance. Replays cannot restore the inflated input
+or lower a previously completed output; conflicts stay excluded.
+Input includes cached tokens; output already includes reasoning. Explicit Claude one-hour cache writes
+are priced at their own rate, independently of OCX's configurable cache assumption.
+
+Attribution is conservative. Claude Code captures the response's `request-id` header in assistant
+`requestId`. Anthropic answers with `req_` IDs; OCX answers every logged Messages call with
+`ocx-<32 hex>`, equal to the `requestId` of its own usage-log row. OCX's relay-native intercept path
+writes no OCX row and forwards Anthropic's `req_` ID. A `msg_` ID alone proves nothing, since OCX
+passthrough may preserve it. Claude records are classified in this order, each with a stored evidence value:
+
+| Record | Route | Evidence |
+|---|---|---|
+| model starts with `ocx-` (an OCX picker alias Anthropic cannot serve) | OCX | `ocx-model-alias` |
+| `requestId` matches `req_` + 16–128 alphanumerics | direct | `anthropic-request-header` |
+| `requestId` starts with `ocx-` | OCX | `ocx-request-marker` |
+| `requestId` absent or empty | unknown | `request-id-absent` |
+| any other `requestId` | unknown | `request-id-unrecognized` |
+
+Rows stored by Claude parser revision 1 carry `route-unverified` for both unknown cases. Once per
+database (meta `nativeEvidenceV2:claude`), Claude transcripts whose last scanned modification is no
+older than one hour before the earliest such row are reread through the normal cursor path; older
+files cannot contain them. A reread replaces `route-unverified` with the specific reason, and an
+unrecognized ID outweighs an absent one. Rows whose source file no longer exists keep
+`route-unverified`. Rereading an already priced direct row leaves its event, amount and basis
+unchanged. An `ocx-` model is never valued at Anthropic rates, even as a reference amount.
+
+`QUOTA_CLAUDE_OCX_FROM` (RFC3339 with zone) and optional `QUOTA_CLAUDE_OCX_UNTIL` (exclusive, later
+than the start) record the operator's statement that on this installation, within that window,
+every Claude Code call that went directly to Anthropic carries a `req_` ID, so a record with no
+request ID was answered by OCX and is costed from OCX's usage log. The policy is stored as meta
+`claudeRoutePolicy` (`basis: operator-cutover`); `off` clears it and an unset variable keeps the stored
+value. It changes the usage counts only, never costs. It applies at read time only to Claude rows still unknown with `request-id-absent` and
+`from <= at < until`, which then count as OCX with evidence `configured-ocx-cutover`. It never
+applies to `req_` or `ocx-` IDs, unrecognized IDs, `route-unverified`, conflicts, other sources or
+rows outside the window. Stored rows are never rewritten, so removing the policy returns them to
+pending. Token similarity to OCX rows is not used as route proof.
+
+Antigravity generation metadata identifies its direct service. The deployment owner has established that all Codex calls use OCX.
+OCX usage is therefore the sole source for Codex accounting; native Codex transcripts are not scanned.
+Legacy Codex ledger rows remain retained but are filtered from all native cost/summary reads, including
+any older row marked direct. They cannot create an additional charge, pending amount or warning.
+OCX-routed records are excluded because OCX's own row already counts the call. These rules assume unmodified local source logs
+and the documented OCX response behavior; they cannot authenticate forged logs or infer historical
+proxy versions. A changed source contract needs a parser revision and bounded replay.
+
+Claude Code costs come from OCX's usage log alone. The first time this release opens a history, it
+copies the Claude rows that costs counted until then (route direct) into `native_settled`, keeping
+only what costs read (time, provider, model, input, output and cache-read tokens, stored amount and
+basis), and records the instant in meta `nativeCostsSettledAt`, all in one transaction; later opens
+change nothing. A history too full for the copy under `QUOTA_DB_MAX_MIB` does not open: the error
+says to raise the limit or archive history, and nothing is written, so `scripts/deploy.sh` restores
+the previous release when the health check fails. Costs read Claude transcripts only from that settled copy, so a period keeps the
+total it had: a transcript row that grows, is reread, arrives late or turns direct afterwards never
+reaches it. Settled rows expire with the same retention cutoff as `native_usage`. Collection goes on
+for usage and session data, but computes no price for Claude rows: a new row is stored with basis
+`not-valued` and no amount, a row read again keeps the amount and basis stored for it, and the
+background repricing page skips Claude. Antigravity rows are still valued and still join costs as
+before. `analytics.nativeUsage.claude.includedRequests` counts the settled rows,
+`costsSettledAt` gives the settlement instant, and `unsettledDirectNewRequests` /
+`unsettledDirectPastRequests` count unsettled rows with direct evidence (a `req_` ID) dated at or
+after, and before, that instant, with `unsettledDirectFirstAt` / `unsettledDirectLastAt`. Those
+rows produce one warning that states the counts and dates, that they were not added to costs, and
+that OCX's usage log should be checked for the same calls and the call path reviewed; it does not
+claim the call bypassed OCX, and it names no amount. Each row counts once by its stable ID however
+often it is read. Pending, OCX and conflicting Claude records are diagnosis counts only and produce
+no warning and no cost note.
+
+Only included ledger rows join the existing cost analysis. Costs use the current collection time,
+with OCX rows bounded by their last successful read; native rows continue advancing during an OCX
+outage. Quota calibration, account attribution, coverage and usage periods still use OCX rows alone.
+Native account attribution stays unknown. Missing tariffs retain tokens and unknown dollars.
+`analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters.
+`analytics.nativeUsage.{claude,antigravity}` reports source status, pending files, invalid/failed
+records and `includedRequests`/`pendingRequests`/`proxyRequests`/`conflictRequests`, with
+`pendingApiUsd` summing the reference amounts of pending Antigravity rows only (null for Claude Code,
+whose transcripts are not valued) and `unpricedRequests` counting
+rows without an amount. `proxyByEvidence`, `pendingByReason` and `conflictByReason` break those counts
+down by evidence value and are always objects. `claude.routePolicy` is `{from, until, basis}` (with
+`until` null when open) or null.
+These counts cover retained history, not the selected cost period. Routine import progress stays in
+the status data. For Antigravity, banners report actual read/format failures, pending records with
+their counts by reason (no request ID, unrecognized request ID, awaiting reread, other), and
+conflicting records separately, and say that the counts cover the retained history. OCX-routed
+records produce no banner. A cost period in `analytics.costs.periods` carries `nativeExcluded`, the
+pending and conflicting Antigravity candidates within that period (absent when there are none), and
+the cost screen states them under the period's tables. A Claude Code record without
+any request ID cannot be joined to its OCX row afterwards: OCX's usage log keeps no message ID or
+upstream request ID, and its `conversationId` is a hash of Claude Code's `metadata.user_id`, which
+transcripts do not store.
+Both confirmed and pending candidates follow the configured history retention/reset boundaries.
+
+Scanning is bounded per source and resumes across collection cycles/restarts. A partial JSONL tail
+keeps its offset and counts as `waitingFiles`, not a pending historical file. An unchanged incomplete
+tail is not reread; an append/replacement reactivates it. Source errors do not discard stored data.
+First-run backfill is incomplete until the backlog is consumed. The old binary ignores the additive native
+tables and still sees the original OCX accounting; no migration of OCX rows is required.
 
 ### Usage periods
 

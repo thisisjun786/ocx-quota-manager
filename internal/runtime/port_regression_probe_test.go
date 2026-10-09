@@ -55,7 +55,7 @@ func TestProbeHealthyProviderSurvivesOtherOutage(t *testing.T) {
 	}
 
 	// Success for both on the next scheduled refresh, then OpenAI fails again.
-	clk.Set(clk.Now().Add(2 * time.Minute))
+	clk.Set(clk.Now().Add(5 * time.Minute))
 	fake.SetHost(openaiHost, transport.Response{Status: 200, Body: []byte(`{"account_id":"account","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":604800}}}`)}, nil)
 	rt.cycle(context.Background())
 	okSnap := getProbeSnapshot(t, srv)
@@ -67,7 +67,7 @@ func TestProbeHealthyProviderSurvivesOtherOutage(t *testing.T) {
 		t.Fatalf("after success observations=%d want 3", n)
 	}
 
-	clk.Set(clk.Now().Add(2 * time.Minute))
+	clk.Set(clk.Now().Add(5 * time.Minute))
 	fake.SetHost(openaiHost, transport.Response{}, errors.New("refused"))
 	rt.cycle(context.Background())
 	after := getProbeSnapshot(t, srv)
@@ -361,7 +361,7 @@ func TestProbeCooldownDoesNotCreateObservations(t *testing.T) {
 	rt.Home = writeProbeHome(t, map[string]string{"anthropic": "synthetic-token"})
 	rt.Direct = []string{"anthropic"}
 	rt.cycle(context.Background())
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 29; i++ {
 		clk.Set(clk.Now().Add(10 * time.Second))
 		rt.cycle(context.Background())
 	}

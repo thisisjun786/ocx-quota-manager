@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS quota_observations (seq INTEGER PRIMARY KEY,
   reconciliation TEXT NOT NULL, usedAccumulation TEXT NOT NULL, pairsSample INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS quota_observations_window ON quota_observations(provider,account,window,seq);
 CREATE INDEX IF NOT EXISTS quota_observations_time ON quota_observations(at);
+CREATE TABLE IF NOT EXISTS collection_logs (id INTEGER PRIMARY KEY, startedAt INTEGER NOT NULL, provider TEXT NOT NULL, account TEXT NOT NULL, endpoint TEXT NOT NULL, result TEXT NOT NULL, httpStatus INTEGER, durationMs INTEGER NOT NULL, retryAfterMs INTEGER, nextAttemptAt INTEGER NOT NULL, failures INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS collection_logs_time ON collection_logs(startedAt,id);
 CREATE TABLE IF NOT EXISTS usage_timings (id TEXT PRIMARY KEY, durationMs REAL, firstOutputMs REAL, tokensReported INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS cursor_cache_costs (id TEXT PRIMARY KEY, noCacheUsd REAL NOT NULL, fullCacheUsd REAL NOT NULL, eligibleInputTokens REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS claude_cache_costs (id TEXT PRIMARY KEY, fiveMinuteUsd REAL NOT NULL, oneHourUsd REAL NOT NULL, cacheWriteTokens REAL NOT NULL);
@@ -59,17 +61,19 @@ CREATE TEMP VIEW IF NOT EXISTS usage_valued AS
          ELSE u.usd END noCacheUsd,
     u.rowid rid
   FROM usage u LEFT JOIN cursor_cache_costs c ON c.id=u.id AND u.provider='cursor'
-  LEFT JOIN claude_cache_costs cc ON cc.id=u.id AND u.provider='anthropic'
+  LEFT JOIN claude_cache_costs cc ON cc.id=u.id AND u.provider IN ('anthropic','anthropic-native')
   LEFT JOIN assumption a ON 1=1 LEFT JOIN claude cl ON 1=1;
 `
 
 var requiredTables = []string{
+	"native_usage", "native_cursors", "native_settled",
 	"meta", "usage", "samples", "quota_observations", "usage_timings",
 	"cursor_cache_costs", "claude_cache_costs", "identity_epochs",
-	"price_evidence", "usage_prices", "ollama_observations",
+	"price_evidence", "usage_prices", "ollama_observations", "collection_logs",
 }
 
 var requiredIndexes = []string{
+	"native_usage_time",
 	"usage_time", "samples_time", "quota_observations_window",
-	"quota_observations_time", "identity_epochs_open",
+	"quota_observations_time", "identity_epochs_open", "collection_logs_time",
 }

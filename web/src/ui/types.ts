@@ -61,10 +61,16 @@ export type HistoricalCapacity = {
   basis?: string | null;
 };
 
+export type CapacityCycle = {from: string; to: string; apiUsd: number; deltaPp: number | null; matchedDeltaPp: number | null; usable: boolean; selected: boolean};
+export type CapacityShift = {at: string; beforeApiUsd: number; afterApiUsd: number; changeRatio: number | null};
+
 export type WindowAnalytics = {
   status?: string;
   reason?: string;
   capacityApiUsd?: number | null;
+  capacityCycles?: CapacityCycle[];
+  capacityRangeApiUsd?: {low: number; high: number} | null;
+  capacityShift?: CapacityShift | null;
   remainingApiUsd?: number | null;
   capacityBasis?: string | null;
   capacityReason?: string | null;
@@ -247,11 +253,37 @@ export function historicalCapacity(value: unknown): HistoricalCapacity | null {
   };
 }
 
+export function capacityCycles(value: unknown): CapacityCycle[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap(row => {
+    const o = asRecord(row);
+    const from = str(o?.from), to = str(o?.to), apiUsd = num(o?.apiUsd);
+    if (!o || !from || !to || apiUsd === null) return [];
+    return [{from, to, apiUsd, deltaPp: num(o.deltaPp), matchedDeltaPp: num(o.matchedDeltaPp), usable: o.usable === true, selected: o.selected === true}];
+  });
+}
+
+function capacityShift(value: unknown): CapacityShift | null {
+  const o = asRecord(value);
+  const at = str(o?.at), before = num(o?.beforeApiUsd), after = num(o?.afterApiUsd);
+  return o && at && before !== null && after !== null ? {at, beforeApiUsd: before, afterApiUsd: after, changeRatio: num(o.changeRatio)} : null;
+}
+
+function capacityRange(value: unknown): {low: number; high: number} | null {
+  const o = asRecord(value);
+  const low = num(o?.low), high = num(o?.high);
+  return low !== null && high !== null ? {low, high} : null;
+}
+
 export function windowAnalytics(value: unknown): WindowAnalytics | undefined {
   const o = asRecord(value);
   if (!o) return undefined;
   const providerWide = bool(o.providerWide);
+  const cycles = capacityCycles(o.capacityCycles);
   return {
+    ...(cycles ? {capacityCycles: cycles} : {}),
+    capacityRangeApiUsd: capacityRange(o.capacityRangeApiUsd),
+    capacityShift: capacityShift(o.capacityShift),
     status: str(o.status) ?? undefined,
     reason: str(o.reason) ?? undefined,
     capacityApiUsd: o.capacityApiUsd === null ? null : num(o.capacityApiUsd),

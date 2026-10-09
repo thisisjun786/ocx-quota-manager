@@ -16,14 +16,16 @@ import (
 const failureNote = "수집 작업이 중단되어 마지막 기록을 표시합니다."
 
 type Runtime struct {
-	Clock      clock.Clock
-	Store      store.Store
-	Transport  transport.Transport
-	Interval   time.Duration
-	Direct     []string
-	Home       string
-	CodexHome  string
-	ClaudeHome string
+	Clock         clock.Clock
+	Store         store.Store
+	Transport     transport.Transport
+	Interval      time.Duration
+	Direct        []string
+	Home          string
+	CodexHome     string
+	ClaudeHome    string
+	GeminiHome    string
+	NativeEnabled bool
 
 	mu                sync.Mutex
 	published         atomic.Value // contract.Snapshot
@@ -44,6 +46,9 @@ func New(clk clock.Clock, st store.Store, tr transport.Transport) *Runtime {
 		tr = collect.NewHTTPSTransport()
 	}
 	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: 10 * time.Second, sched: collect.NewScheduler(clk, tr)}
+	if logs, ok := st.(interface{ InsertCollectionLog(collect.Attempt) error }); ok {
+		rt.sched.OnAttempt = logs.InsertCollectionLog
+	}
 	rt.publish(rt.bootSnapshot())
 	return rt
 }
@@ -135,6 +140,19 @@ func (rt *Runtime) Start(ctx context.Context) {
 	}()
 }
 
+// ollamaCollectAllowed reports whether a currently usable Ollama Cloud
+// credential needs the balance poll even when the other direct readers are
+// all off. The scheduler still re-checks the full credential contract; this
+// gate only prevents a no-binding cycle from being marked direct.
+func ollamaCollectAllowed(bindings []collect.Binding) bool {
+	for _, b := range bindings {
+		if b.Provider == "ollama-cloud" && b.Enabled && b.Token != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (rt *Runtime) cycle(ctx context.Context) {
 	if !rt.poll.TryLock() {
 		return
@@ -143,24 +161,29 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	now := rt.Clock.Now().UTC()
 	local, err := (collect.Reader{Home: rt.Home, CodexHome: rt.CodexHome, ClaudeHome: rt.ClaudeHome}).LoadLocal(now)
 	if err != nil {
-		rt.markFailure()
+		rt.markFailureWithNative(ctx, now)
 		return
 	}
 	// An unreadable credential source is not an authoritative empty roster.
 	// Keep the last public snapshot without reusing credentials for new calls.
-	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials"} {
+	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials", "claudeProfile"} {
 		switch local.Files[key] {
 		case collect.FileMalformed, collect.FileUnreadable, collect.FileOversized:
-			rt.markFailure()
+			rt.markFailureWithNative(ctx, now)
 			return
 		}
 	}
-	var rows []collect.Reading
-	if len(rt.Direct) > 0 {
-		rows = rt.sched.Collect(ctx, local.Bindings, append(append([]string{}, rt.Direct...), "ollama-cloud"))
+	direct := append([]string{}, rt.Direct...)
+	if ollamaCollectAllowed(local.Bindings) {
+		direct = append(direct, "ollama-cloud")
 	}
+	var rows []collect.Reading
+	if len(direct) > 0 {
+		rows = rt.sched.Collect(ctx, local.Bindings, direct)
+	}
+	logErrors := rt.sched.LogErrors()
 	epochs, epochErr := rt.bindingEpochs(local.Bindings, now.UnixMilli())
-	storeFailed := epochErr != nil
+	storeFailed := epochErr != nil || len(logErrors) != 0
 	if rt.Store != nil {
 		for _, row := range rows {
 			if !persistable(row) {
@@ -182,7 +205,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 			storeFailed = true
 		}
 	}
-	if len(rt.Direct) > 0 {
+	if len(direct) > 0 {
 		outcomes := rt.sched.Outcomes()
 		attachDirectStatus(providers, outcomes, now)
 		if err := rt.persistDirectOutcomes(outcomes); err != nil {
@@ -200,6 +223,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		}
 	}
 	usageStatus, ingestErr := rt.ingestUsage(now)
+	nativeStatus, nativeWarnings := rt.collectNative(ctx, now)
 	if ingestErr == nil {
 		if err := MaintainIfDue(rt.Store, now); err != nil {
 			storeFailed = true
@@ -237,13 +261,19 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		previous, _ := rt.published.Load().(contract.Snapshot)
 		analytics, providers = retainAnalysis(previous, providers)
 	}
+	if rt.NativeEnabled {
+		analytics["nativeUsage"] = nativeStatus
+		if err := rt.attachNativeCosts(analytics, providers, now); err != nil {
+			nativeWarnings = append(nativeWarnings, "도구별 비용 집계가 지연되고 있습니다.")
+		}
+	}
 	src := "opencodex-local-snapshot"
 	rt.publish(contract.Snapshot{
 		SchemaVersion:          contract.SchemaVersion,
 		ObservedAt:             &iso,
 		Source:                 &src,
 		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
-		Warnings:               local.Warnings,
+		Warnings:               append(local.Warnings, nativeWarnings...),
 		Providers:              providers,
 		Analytics:              analytics,
 	})

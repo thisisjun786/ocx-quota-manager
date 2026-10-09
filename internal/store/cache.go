@@ -39,6 +39,7 @@ func (h *History) invalidateAll() {
 	h.cacheMu.Lock()
 	h.usage.valid = false
 	h.obs.valid = false
+	h.native = nil
 	h.cacheMu.Unlock()
 }
 

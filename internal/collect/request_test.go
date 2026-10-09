@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"github.com/thisisjun786/ocx-quota-manager/internal/clock"
 	"github.com/thisisjun786/ocx-quota-manager/internal/transport"
-	"math"
 	"testing"
 	"time"
 )
@@ -68,19 +67,13 @@ func TestSchedulerIntervalAndCredentialIsolation(t *testing.T) {
 	}
 	b.Token = "replacement"
 	s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
-	if fake.CallCount() != 2 {
-		t.Fatal("newidentityblocked")
+	if fake.CallCount() != 1 {
+		t.Fatal("token rotation bypassed cadence")
 	}
 	b.BaseStatus = "unknown"
 	s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
-	if fake.CallCount() != 2 {
+	if fake.CallCount() != 1 {
 		t.Fatal("unknownbasecalled")
-	}
-}
-func TestOllamaFraction(t *testing.T) {
-	rows, err := parseOllama([]byte(`{"limits":{"session":{"usage":0.4237},"weekly":{"usage":0}}}`), 1800000000000)
-	if err != nil || len(rows) != 2 || math.Abs(*rows[0].UsedPercent-42.37) > 1e-10 || *rows[1].UsedPercent != 0 {
-		t.Fatal(rows, err)
 	}
 }
 
@@ -94,7 +87,7 @@ func TestSchedulerOutageRemainsBounded(t *testing.T) {
 		t.Fatal(first)
 	}
 	for i := 0; i < 20; i++ {
-		clk.Set(clk.Now().Add(2 * time.Minute))
+		clk.Set(clk.Now().Add(5 * time.Minute))
 		rows := s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
 		if len(rows) != 2 || rows[1].ObservedAt != first[0].ObservedAt || rows[1].Kind != WindowFailed {
 			t.Fatalf("failure %d grew or refreshed data: %+v", i, rows)
@@ -129,6 +122,7 @@ func TestSchedulerAccountRefIsolatesCache(t *testing.T) {
 		t.Fatal(first)
 	}
 	b.AccountRef = stringRef("second")
+	clk.Set(clk.Now().Add(5 * time.Minute))
 	rows := s.Collect(context.Background(), []Binding{b}, []string{"openai"})
 	if f.CallCount() != 2 || len(rows) != 1 || rows[0].WindowID != "" {
 		t.Fatal("another physical account inherited old data", rows)
@@ -160,9 +154,9 @@ func TestPublicPercentBoundsAndEmptyRetirement(t *testing.T) {
 	s := NewScheduler(clk, f)
 	b := Binding{Provider: "anthropic", AccountID: "a", Token: "synthetic", Kind: KindOAuth, Enabled: true, BaseStatus: "default"}
 	s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
-	clk.Set(clk.Now().Add(2 * time.Minute))
+	clk.Set(clk.Now().Add(5 * time.Minute))
 	s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
-	clk.Set(clk.Now().Add(2 * time.Minute))
+	clk.Set(clk.Now().Add(5 * time.Minute))
 	rows := s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
 	if len(rows) != 1 || rows[0].WindowID != "" {
 		t.Fatal("empty success resurrected old endpoint limits", rows)
