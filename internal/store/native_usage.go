@@ -3,12 +3,17 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/contract"
 	"github.com/thisisjun786/ocx-quota-manager/internal/nativeusage"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const nativeSchema = `
@@ -20,7 +25,26 @@ CREATE TABLE IF NOT EXISTS native_cursors (
  client TEXT NOT NULL, pathHash TEXT NOT NULL, cursor TEXT NOT NULL,
  PRIMARY KEY(client,pathHash));`
 
+// nativeSettledSchema is created by the settlement transaction itself, so a
+// history too full for it is left unchanged.
+const nativeSettledSchema = `CREATE TABLE IF NOT EXISTS native_settled (
+ id TEXT PRIMARY KEY, client TEXT NOT NULL, at INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+ input INTEGER NOT NULL, output INTEGER NOT NULL, cacheRead INTEGER NOT NULL, usd REAL, basis TEXT NOT NULL) WITHOUT ROWID;`
+
+// NativeSettledKey records when Claude Code transcripts stopped adding to costs.
+// OCX's usage log is the cost record from then on. The transcript rows counted
+// until then were copied once into native_settled, keeping only what costs read
+// (time, provider, model, tokens, stored amount and basis), so past periods keep
+// the totals they showed: a transcript row that changes, arrives late or is
+// read again afterwards never reaches the totals.
+const NativeSettledKey = "nativeCostsSettledAt"
+
+// NativeNotValued is the basis of a Claude Code transcript row collected after
+// the settlement: collection keeps its tokens and route, and computes no price.
+const NativeNotValued = "not-valued"
+
 type NativeSummary struct {
+	// Included counts the rows in costs; for Claude Code, the settled rows.
 	Included         int            `json:"includedRequests"`
 	Pending          int            `json:"pendingRequests"`
 	Proxy            int            `json:"proxyRequests"`
@@ -30,6 +54,17 @@ type NativeSummary struct {
 	ProxyByEvidence  map[string]int `json:"proxyByEvidence"`
 	PendingByReason  map[string]int `json:"pendingByReason"`
 	ConflictByReason map[string]int `json:"conflictByReason"`
+	// Claude Code only. SettledAt is when its transcript costs were settled.
+	// Unsettled direct rows carry an Anthropic request ID (req_) but were not
+	// settled: they are reported, never added to costs. Past ones are dated
+	// before SettledAt (read late), new ones at or after it. Each row counts
+	// once by its stable ID however often it is read.
+	SettledAt                     *string `json:"costsSettledAt,omitempty"`
+	UnsettledDirectPast           int     `json:"unsettledDirectPastRequests"`
+	UnsettledDirectNew            int     `json:"unsettledDirectNewRequests"`
+	UnsettledDirectFirst          *string `json:"unsettledDirectFirstAt,omitempty"`
+	UnsettledDirectLast           *string `json:"unsettledDirectLastAt,omitempty"`
+	unsettledFirst, unsettledLast int64
 }
 
 // Complete returns s with every breakdown present, so none encodes as null.
@@ -46,8 +81,9 @@ type NativeView struct {
 	Rows         []Usage
 	Summary      map[string]NativeSummary
 	ClaudePolicy *ClaudeRoutePolicy
-	// Excluded lists the pending and conflicting candidates (not OCX-routed
-	// ones) by client and time, so a cost period can say how many it left out.
+	// Excluded lists the pending and conflicting candidates of a client whose
+	// transcripts still add to costs (Antigravity), so a cost period can say how
+	// many it left out. Claude Code transcripts no longer add to costs.
 	Excluded []NativeExcluded
 }
 
@@ -199,6 +235,37 @@ func (h *History) NativeCutoff(now int64) int64 {
 	return cutoff
 }
 
+// settleNativeCosts copies, once, the Claude Code transcript rows that costs
+// counted (direct route, valued by an earlier release) into native_settled and
+// records when, in one transaction. A history too full for the copy is left
+// unchanged and the error says how to make room, so opening fails rather than
+// running without the settled totals.
+func (h *History) settleNativeCosts(now int64) error {
+	err := h.transact(func(tx *sql.Tx) error {
+		var prior string
+		err := tx.QueryRow("SELECT value FROM meta WHERE key=?", NativeSettledKey).Scan(&prior)
+		if err != sql.ErrNoRows {
+			return err
+		}
+		if _, err := tx.Exec(nativeSettledSchema); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO native_settled SELECT id,client,at,
+		 COALESCE(json_extract(event,'$.Provider'),''),COALESCE(json_extract(event,'$.Model'),''),
+		 COALESCE(json_extract(event,'$.Input'),0),COALESCE(json_extract(event,'$.Output'),0),COALESCE(json_extract(event,'$.CacheRead'),0),usd,basis
+		 FROM native_usage WHERE client='claude' AND route=? AND basis<>?`, string(nativeusage.Direct), NativeNotValued); err != nil {
+			return err
+		}
+		_, err = tx.Exec("INSERT INTO meta VALUES (?,?)", NativeSettledKey, strconv.FormatInt(now, 10))
+		return err
+	})
+	var e *sqlite.Error
+	if errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_FULL {
+		return fmt.Errorf("settling Claude Code transcript costs needs more room than the history size limit allows; raise QUOTA_DB_MAX_MIB or archive history, then start again (nothing was changed): %w", err)
+	}
+	return err
+}
+
 // CommitNative atomically persists parser progress and normalized candidates.
 // The legacy OCX usage table is never written by this path. A source failure
 // therefore cannot change OCX accounting or calibration, including on rollback.
@@ -225,6 +292,7 @@ func (h *History) CommitNative(client string, b nativeusage.Batch, now int64) er
 			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
+			stored := err == nil
 			e := incoming
 			if err == nil {
 				var old nativeusage.Event
@@ -236,7 +304,17 @@ func (h *History) CommitNative(client string, b nativeusage.Batch, now int64) er
 					continue
 				}
 			}
-			q := quoteNative(e, evidence, catalog)
+			var q ingestQuote
+			switch {
+			case client != "claude":
+				q = quoteNative(e, evidence, catalog)
+			case stored:
+				// Claude Code transcripts are no longer valued: a row read again
+				// keeps the amount stored for it, deleting nothing.
+				q = ingestQuote{usd: priorUSD, basis: priorBasis}
+			default:
+				q = ingestQuote{basis: NativeNotValued}
+			}
 			encoded, err := json.Marshal(e)
 			if err != nil {
 				return err
@@ -262,6 +340,10 @@ func (h *History) CommitNative(client string, b nativeusage.Batch, now int64) er
 		}
 		// Revisit a bounded page of unknown prices independently of file
 		// cursors: a later catalog must not require rereading gigabytes of logs.
+		// Claude Code transcripts are not valued any more.
+		if client == "claude" {
+			return nil
+		}
 		repriced, err := repriceNativePage(tx, client, now, evidence, catalog)
 		if err != nil {
 			return err
@@ -484,8 +566,10 @@ func quoteNative(e nativeusage.Event, evidence []Evidence, catalog *Catalog) ing
 	return q
 }
 
-// NativeUsage returns only proven direct rows for cost analysis, plus counts
-// and reference amounts of unresolved candidates. Codex is owned by OCX;
+// NativeUsage returns the transcript rows that add to costs, plus counts and
+// reference amounts of the rest. Claude Code adds only its settled rows (see
+// NativeSettledKey); its other rows are counted for diagnosis and never priced
+// into costs. Antigravity adds its proven direct rows. Codex is owned by OCX;
 // retained candidates from earlier collectors are not counted a second time.
 // The Claude route policy is applied here only; stored rows never change, so
 // removing the policy returns its rows to pending. No raw IDs leave this seam.
@@ -496,18 +580,68 @@ func (h *History) NativeUsage() (NativeView, error) {
 		return *h.native, nil
 	}
 	policy := h.claudeRoutePolicy()
-	rows, err := h.db.Query(`SELECT id,client,at,route,event,usd,basis,COALESCE(json_extract(event,'$.Evidence'),'') FROM native_usage WHERE client IN ('claude','antigravity') ORDER BY at`)
+	settledAt := int64(-1)
+	if v, ok := h.Meta(NativeSettledKey); ok {
+		if n, ok := v.(float64); ok {
+			settledAt = int64(n)
+		}
+	}
+	v := NativeView{Rows: []Usage{}, Summary: map[string]NativeSummary{}, ClaudePolicy: policy}
+	row := func(id string, at int64, raw string, usd *float64, basis string) error {
+		var e nativeusage.Event
+		if err := json.Unmarshal([]byte(raw), &e); err != nil {
+			return err
+		}
+		in, out, read, tokens := float64(e.Input), float64(e.Output), float64(e.CacheRead), float64(e.Input+e.Output)
+		v.Rows = append(v.Rows, Usage{ID: id, At: at, Provider: e.Provider, Model: &e.Model, Input: &in, Output: &out, Cached: &read, Tokens: &tokens, USD: usd, Basis: &basis})
+		return nil
+	}
+	settled, err := h.db.Query(`SELECT id,at,provider,model,input,output,cacheRead,usd,basis FROM native_settled WHERE client='claude' ORDER BY at`)
+	if err != nil {
+		return NativeView{}, err
+	}
+	claude := v.Summary["claude"].Complete()
+	for settled.Next() {
+		var id, provider, model, basis string
+		var at, in, out, read int64
+		var usd *float64
+		if err = settled.Scan(&id, &at, &provider, &model, &in, &out, &read, &usd, &basis); err != nil {
+			settled.Close()
+			return NativeView{}, err
+		}
+		input, output, cached, tokens := float64(in), float64(out), float64(read), float64(in+out)
+		v.Rows = append(v.Rows, Usage{ID: id, At: at, Provider: provider, Model: &model, Input: &input, Output: &output, Cached: &cached, Tokens: &tokens, USD: usd, Basis: &basis})
+		claude.Included++
+		if usd == nil {
+			claude.Unpriced++
+		}
+	}
+	settled.Close()
+	if err = settled.Err(); err != nil {
+		return NativeView{}, err
+	}
+	if settledAt >= 0 {
+		at := time.UnixMilli(settledAt).UTC().Format(time.RFC3339Nano)
+		claude.SettledAt = &at
+	}
+	v.Summary["claude"] = claude
+	rows, err := h.db.Query(`SELECT n.id,n.client,n.at,n.route,n.event,n.usd,n.basis,COALESCE(json_extract(n.event,'$.Evidence'),''),s.id IS NOT NULL
+	 FROM native_usage n LEFT JOIN native_settled s ON s.id=n.id WHERE n.client IN ('claude','antigravity') ORDER BY n.at`)
 	if err != nil {
 		return NativeView{}, err
 	}
 	defer rows.Close()
-	v := NativeView{Rows: []Usage{}, Summary: map[string]NativeSummary{}, ClaudePolicy: policy}
 	for rows.Next() {
 		var id, client, route, raw, basis, evidence string
 		var at int64
 		var usd *float64
-		if err = rows.Scan(&id, &client, &at, &route, &raw, &usd, &basis, &evidence); err != nil {
+		var isSettled bool
+		if err = rows.Scan(&id, &client, &at, &route, &raw, &usd, &basis, &evidence, &isSettled); err != nil {
 			return v, err
+		}
+		transcriptCosts := client != "claude"
+		if !transcriptCosts && isSettled && nativeusage.Route(route) == nativeusage.Direct {
+			continue // counted from its settled copy; a later route still shows below
 		}
 		s := v.Summary[client].Complete()
 		if nativeusage.Route(route) == nativeusage.Unknown && policy.covers(client, evidence, at) {
@@ -515,25 +649,41 @@ func (h *History) NativeUsage() (NativeView, error) {
 		}
 		switch nativeusage.Route(route) {
 		case nativeusage.Direct:
-			var e nativeusage.Event
-			if err = json.Unmarshal([]byte(raw), &e); err != nil {
-				return v, err
+			if transcriptCosts {
+				if err = row(id, at, raw, usd, basis); err != nil {
+					return v, err
+				}
+				s.Included++
+				break
 			}
-			in, out, read, tokens := float64(e.Input), float64(e.Output), float64(e.CacheRead), float64(e.Input+e.Output)
-			v.Rows = append(v.Rows, Usage{ID: id, At: at, Provider: e.Provider, Model: &e.Model, Input: &in, Output: &out, Cached: &read, Tokens: &tokens, USD: usd, Basis: &basis})
-			s.Included++
+			if at < settledAt {
+				s.UnsettledDirectPast++
+			} else {
+				s.UnsettledDirectNew++
+			}
+			if s.unsettledFirst == 0 || at < s.unsettledFirst {
+				s.unsettledFirst = at
+			}
+			if at > s.unsettledLast {
+				s.unsettledLast = at
+			}
 		case nativeusage.Proxy:
 			s.Proxy++
 			s.ProxyByEvidence[evidence]++
 		case nativeusage.Conflict:
 			s.Conflicts++
 			s.ConflictByReason[evidence]++
-			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
+			if transcriptCosts {
+				v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
+			}
 		default:
 			s.Pending++
 			s.PendingByReason[evidence]++
-			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
-			if usd != nil {
+			if transcriptCosts {
+				v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
+			}
+			// A reference amount only where transcripts are still valued.
+			if usd != nil && transcriptCosts {
 				total := *usd
 				if s.PendingUSD != nil {
 					total += *s.PendingUSD
@@ -541,13 +691,20 @@ func (h *History) NativeUsage() (NativeView, error) {
 				s.PendingUSD = &total
 			}
 		}
-		if usd == nil {
+		// A settled row's missing amount was counted from its settled copy.
+		if usd == nil && !(isSettled && !transcriptCosts) {
 			s.Unpriced++
 		}
 		v.Summary[client] = s
 	}
 	if err = rows.Err(); err != nil {
 		return v, err
+	}
+	if s, ok := v.Summary["claude"]; ok && s.unsettledLast > 0 {
+		first := time.UnixMilli(s.unsettledFirst).UTC().Format(time.RFC3339Nano)
+		last := time.UnixMilli(s.unsettledLast).UTC().Format(time.RFC3339Nano)
+		s.UnsettledDirectFirst, s.UnsettledDirectLast = &first, &last
+		v.Summary["claude"] = s
 	}
 	h.native = &v
 	return v, nil

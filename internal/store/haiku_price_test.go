@@ -81,10 +81,14 @@ func TestHaiku55NativeClaudeCountsCacheInPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	v, err := h.NativeUsage()
+	// Collection stores Claude Code rows without a price; the native quote
+	// still counts cache in the prompt for clients that are valued.
+	if _, usd, _ := collected(t, h, e); nativeCount(t, h) != 1 || usd != nil {
+		t.Fatalf("Claude transcript valued %v", usd)
+	}
 	// 1001*.5 + 1000*2.5 + 90000*.05 + 5000*.625 + 4000*1.
-	if err != nil || len(v.Rows) != 1 || v.Rows[0].USD == nil || math.Abs(*v.Rows[0].USD-.0146255) > 1e-12 {
-		t.Fatalf("native valuation %+v, %v", v, err)
+	if q := quoteNative(e, nil, nil); q.usd == nil || math.Abs(*q.usd-.0146255) > 1e-12 {
+		t.Fatalf("native quote %v", q.usd)
 	}
 }
 

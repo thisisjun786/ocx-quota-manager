@@ -126,6 +126,28 @@ func nativeEvent(id string) nativeusage.Event {
 func nativeBatch(e ...nativeusage.Event) nativeusage.Batch {
 	return nativeusage.Batch{Events: e, Cursors: map[string]nativeusage.Cursor{nativeusage.Hash("path"): {Revision: 1, Offset: 100, Size: 100}}}
 }
+
+// collected reads one transcript row as collection stored it.
+func collected(t *testing.T, h *History, e nativeusage.Event) (stored nativeusage.Event, usd *float64, basis string) {
+	t.Helper()
+	var raw string
+	if err := h.db.QueryRow(`SELECT event,usd,basis FROM native_usage WHERE id=?`, e.ID).Scan(&raw, &usd, &basis); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatal(err)
+	}
+	return stored, usd, basis
+}
+
+func nativeCount(t *testing.T, h *History) (n int) {
+	t.Helper()
+	if err := h.db.QueryRow(`SELECT count(*) FROM native_usage`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func nativeRate(t *testing.T, h *History) {
 	t.Helper()
 	_, err := h.InsertEvidence(Evidence{Provider: "anthropic", Model: "native-test", Status: "official", SourceURL: cachePtr(claudePriceSource), Rates: [4]*float64{cachePtr(10.0), cachePtr(50.0), cachePtr(1.0), cachePtr(12.5)}, FirstRevision: "test", FirstSeenAt: 1800000000000})
@@ -149,23 +171,19 @@ func TestNativeIdempotenceStreamingConflictAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := h.NativeUsage()
-	if err != nil || len(v.Rows) != 1 {
+	if err != nil || len(v.Rows) != 0 || nativeCount(t, h) != 1 {
 		t.Fatal(v, err)
 	}
-	// $10/M uncached, $50/M output, $1/M read, $12.5/M 5m,
-	// $20/M 1h => 10*10 + 5*50 + 100*1 + 5*12.5 + 15*20.
-	want := 812.5 / 1e6
-	if v.Rows[0].USD == nil || math.Abs(*v.Rows[0].USD-want) > 1e-12 {
-		t.Fatalf("price %v want %v", v.Rows[0].USD, want)
+	if _, usd, _ := collected(t, h, e); usd != nil {
+		t.Fatal("Claude transcript valued", *usd)
 	}
 	newer := e
 	newer.Output = 10
 	if err = h.CommitNative("claude", nativeBatch(newer, e), e.At+1000); err != nil {
 		t.Fatal(err)
 	}
-	v, _ = h.NativeUsage()
-	if len(v.Rows) != 1 || *v.Rows[0].Output != 10 {
-		t.Fatal("old clone reduced usage", v)
+	if stored, _, _ := collected(t, h, e); nativeCount(t, h) != 1 || stored.Output != 10 {
+		t.Fatal("old clone reduced usage", stored)
 	}
 	if n, _ := h.Count("usage"); n != 0 {
 		t.Fatal("native polluted OCX", n)
@@ -181,9 +199,8 @@ func TestNativeIdempotenceStreamingConflictAndReopen(t *testing.T) {
 	if err = h.CommitNative("claude", nativeBatch(e), e.At+1000); err != nil {
 		t.Fatal(err)
 	}
-	v, _ = h.NativeUsage()
-	if len(v.Rows) != 1 || *v.Rows[0].Output != 10 {
-		t.Fatal("restart duplicate", v)
+	if stored, _, _ := collected(t, h, e); nativeCount(t, h) != 1 || stored.Output != 10 {
+		t.Fatal("restart duplicate", stored)
 	}
 	proxy := newer
 	proxy.Route = nativeusage.Proxy
@@ -214,46 +231,56 @@ func TestNativeAtomicityPendingAndRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, _ := h.NativeUsage()
-	if len(v.Rows) != 0 || v.Summary["claude"].Pending != 1 || v.Summary["claude"].PendingUSD == nil {
+	if len(v.Rows) != 0 || v.Summary["claude"].Pending != 1 || v.Summary["claude"].PendingUSD != nil {
 		t.Fatal(v)
 	}
 	if err := h.Maintain(e.At + 100*86400000); err != nil {
 		t.Fatal(err)
 	}
-	v, _ = h.NativeUsage()
-	if len(v.Summary) != 0 {
+	if v, _ = h.NativeUsage(); v.Summary["claude"].Pending != 0 || nativeCount(t, h) != 0 {
 		t.Fatal("retention", v)
 	}
 	if err := h.CommitNative("claude", nativeBatch(e), e.At+100*86400000); err != nil {
 		t.Fatal(err)
 	}
-	v, _ = h.NativeUsage()
-	if len(v.Summary) != 0 {
+	if v, _ = h.NativeUsage(); v.Summary["claude"].Pending != 0 || nativeCount(t, h) != 0 {
 		t.Fatal("rescan resurrected excluded usage")
 	}
 }
 
+// Antigravity transcripts are still valued: a price that becomes known fills
+// an unknown amount without rereading the source. Claude Code rows stay unvalued.
 func TestNativePriceBecomesKnownWithoutSourceReplay(t *testing.T) {
 	h := openTemp(t)
 	e := nativeEvent("later-price")
-	if err := h.CommitNative("claude", nativeBatch(e), e.At+1000); err != nil {
+	e.Client, e.Provider = "antigravity", "antigravity"
+	c := nativeEvent("later-price-claude")
+	if err := h.CommitNative("antigravity", nativeBatch(e), e.At+1000); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := h.NativeUsage()
-	if v.Rows[0].USD != nil {
+	if err := h.CommitNative("claude", nativeBatch(c), c.At+1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, usd, _ := collected(t, h, e); usd != nil {
 		t.Fatal("invented price")
 	}
 	nativeRate(t, h)
 	for i := 0; i < 2; i++ {
-		if err := h.CommitNative("claude", nativeusage.Batch{}, e.At+1000); err != nil {
-			t.Fatal(err)
+		for _, client := range []string{"antigravity", "claude"} {
+			if err := h.CommitNative(client, nativeusage.Batch{}, e.At+1000); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	v, _ = h.NativeUsage()
-	if v.Rows[0].USD == nil {
-		t.Fatal("unchanged source stayed unpriced")
+	// $10/M uncached, $50/M output, $1/M read, $12.5/M 5m,
+	// $20/M 1h => 10*10 + 5*50 + 100*1 + 5*12.5 + 15*20.
+	if _, usd, _ := collected(t, h, e); usd == nil || math.Abs(*usd-812.5/1e6) > 1e-12 {
+		t.Fatal("unchanged source stayed unpriced", usd)
 	}
-	cur, _ := h.NativeCursors("claude")
+	if _, usd, basis := collected(t, h, c); usd != nil || basis != NativeNotValued {
+		t.Fatal("Claude transcript repriced", usd, basis)
+	}
+	cur, _ := h.NativeCursors("antigravity")
 	if cur[nativeusage.Hash("path")].Offset != 100 {
 		t.Fatal("repricing moved source cursor")
 	}

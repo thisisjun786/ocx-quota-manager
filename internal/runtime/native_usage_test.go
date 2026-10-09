@@ -53,16 +53,25 @@ func costRequests(t *testing.T, rt *Runtime) int {
 	return c["periods"].(map[string]any)["day"].(costPeriod).Total.Requests
 }
 
-func TestNativeCostsWithoutOCXAndRepeatedCycles(t *testing.T) {
+// A Claude Code transcript collected after costs were settled adds nothing to
+// costs; its direct evidence is reported once however often it is read.
+func TestClaudeTranscriptAddsNoCostAcrossCycles(t *testing.T) {
 	rt, h, clk := nativeRuntime(t)
 	addNativeTranscript(t, rt, "msg_direct", clk.Now().UnixMilli()-1000)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 1 {
-		t.Fatal("native-only requests", n)
+	if n := costRequests(t, rt); n != 0 {
+		t.Fatal("transcript added to costs", n)
+	}
+	first := rt.Snapshot().Warnings
+	if len(first) != 1 || !strings.Contains(first[0], "req_") || !strings.Contains(first[0], "1건") {
+		t.Fatal(first)
 	}
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 1 {
-		t.Fatal("cycle duplicate", n)
+	if n := costRequests(t, rt); n != 0 {
+		t.Fatal("cycle added", n)
+	}
+	if again := rt.Snapshot().Warnings; len(again) != 1 || again[0] != first[0] {
+		t.Fatal("notice repeated or changed", again)
 	}
 	rows, _ := h.ListUsage()
 	if len(rows) != 0 {
@@ -79,7 +88,7 @@ func TestNativeCostsAdvanceDuringOCXFailure(t *testing.T) {
 	writeUsageLog(t, rt.Home, []map[string]any{{"requestId": "ocx-only", "timestamp": at - 1000, "provider": "anthropic", "model": "claude-test", "usage": map[string]any{"inputTokens": 100, "outputTokens": 10}}})
 	addNativeTranscript(t, rt, "msg_first", at-500)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 2 {
+	if n := costRequests(t, rt); n != 1 {
 		t.Fatal(n)
 	}
 	boundary, _ := h.Meta("usageObservedThrough")
@@ -89,8 +98,11 @@ func TestNativeCostsAdvanceDuringOCXFailure(t *testing.T) {
 	clk.T = clk.T.Add(time.Minute)
 	addNativeTranscript(t, rt, "msg_after_outage", clk.Now().UnixMilli()-1000)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 3 {
-		t.Fatal("native cost froze with OCX", n)
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("transcript added to costs during the OCX outage", n)
+	}
+	if s := claudeNativeStatus(t, rt); s.UnsettledDirectNew != 2 {
+		t.Fatal("collection froze with OCX", s.NativeSummary)
 	}
 	after, _ := h.Meta("usageObservedThrough")
 	if after != boundary {
@@ -124,7 +136,7 @@ func TestCodexCostsOwnedByOCX(t *testing.T) {
 	}
 	addNativeTranscript(t, rt, "msg_direct", clk.Now().UnixMilli()-500)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 2 {
+	if n := costRequests(t, rt); n != 1 {
 		t.Fatal("Codex must be counted exactly once via OCX", n)
 	}
 	s := rt.Snapshot()
@@ -138,7 +150,7 @@ func TestCodexCostsOwnedByOCX(t *testing.T) {
 		t.Fatal("Codex local logs scanned", err)
 	}
 	v, err := h.NativeUsage()
-	if err != nil || len(v.Rows) != 1 {
+	if err != nil || len(v.Rows) != 0 {
 		t.Fatal("legacy Codex candidates entered native total", err)
 	}
 	if _, exists := v.Summary["codex"]; exists {
@@ -170,14 +182,14 @@ func TestNativeCollectionSurvivesMalformedOCXConfig(t *testing.T) {
 	}
 	addNativeTranscript(t, rt, "msg_native_despite_config", clk.Now().UnixMilli()-1000)
 	rt.cycle(context.Background())
-	if n := costRequests(t, rt); n != 1 {
-		t.Fatal("native blocked by OCX config", n)
+	if s := claudeNativeStatus(t, rt); s.UnsettledDirectNew != 1 {
+		t.Fatal("native blocked by OCX config", s.NativeSummary)
 	}
 }
 
 func TestNativeIncompleteTailDoesNotWarnOrClaimBackfill(t *testing.T) {
 	rt, _, clk := nativeRuntime(t)
-	addNativeTranscript(t, rt, "msg_complete", clk.Now().UnixMilli()-1000)
+	addClaudeRecord(t, rt, "msg_complete", "", clk.Now().UnixMilli()-1000)
 	path := filepath.Join(rt.ClaudeHome, "projects", "project", "msg_complete.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
@@ -197,8 +209,58 @@ func TestNativeIncompleteTailDoesNotWarnOrClaimBackfill(t *testing.T) {
 			t.Fatal("unfinished source displayed as a problem", s.Warnings)
 		}
 		n := s.Analytics.(map[string]any)["nativeUsage"].(map[string]nativeStatus)["claude"]
-		if n.Status != "ok" || n.PendingFiles != 0 || n.WaitingFiles != 1 || n.Included != 1 {
+		// A record without a request ID is diagnosis only: counted, not warned.
+		if n.Status != "ok" || n.PendingFiles != 0 || n.WaitingFiles != 1 || n.Pending != 1 {
 			t.Fatal(n)
 		}
+	}
+}
+
+// A history written while transcripts still added to costs keeps those rows,
+// with their stored amounts, in the period they belong to; later reads of the
+// same transcripts and new direct records leave the totals alone.
+func TestSettledClaudeCostsStayInTheirPeriod(t *testing.T) {
+	clk := &clock.Var{T: time.Now().UTC()}
+	dir := t.TempDir()
+	h, err := store.Open(dir, store.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := clk.Now().UnixMilli() - 3*3600000
+	old := nativeusage.Event{ID: nativeusage.Hash("settled"), Client: "claude", Provider: "anthropic", PriceProvider: "anthropic", Model: "claude-test", At: at, Input: 100, Output: 10, Route: nativeusage.Direct, Evidence: "anthropic-request-header"}
+	if err = h.CommitNative("claude", nativeusage.Batch{Events: []nativeusage.Event{old}}, at+1000); err != nil {
+		t.Fatal(err)
+	}
+	// As the earlier release stored it: valued, then settled by the new one.
+	if _, err = h.DB().Exec(`UPDATE native_usage SET usd=.001, basis='official'; DELETE FROM native_settled; DELETE FROM meta WHERE key=?`, store.NativeSettledKey); err != nil {
+		t.Fatal(err)
+	}
+	h.Close()
+	if h, err = store.Open(dir, store.OpenOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	rt := New(clk, h, &collect.Fake{})
+	rt.Home, rt.ClaudeHome, rt.CodexHome, rt.GeminiHome = t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	rt.NativeEnabled = true
+	writeUsageLog(t, rt.Home, []map[string]any{ocxNativeRow("ocx-00000000000000000000000000000001", at+1000)})
+	for i := 0; i < 2; i++ {
+		rt.cycle(context.Background())
+		if n := costRequests(t, rt); n != 2 {
+			t.Fatal("settled row plus the OCX row", n)
+		}
+		if w := rt.Snapshot().Warnings; len(w) != 0 {
+			t.Fatal(w)
+		}
+	}
+	addNativeTranscript(t, rt, "msg_new_direct", clk.Now().UnixMilli()-1000)
+	rt.cycle(context.Background())
+	if n := costRequests(t, rt); n != 2 {
+		t.Fatal("new direct record added", n)
+	}
+	s := claudeNativeStatus(t, rt)
+	// The test clock trails the settlement, so the record counts as read late.
+	if s.Included != 1 || s.UnsettledDirectNew+s.UnsettledDirectPast != 1 || s.SettledAt == nil || len(rt.Snapshot().Warnings) != 1 {
+		t.Fatal(s.NativeSummary, rt.Snapshot().Warnings)
 	}
 }

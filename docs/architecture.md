@@ -147,7 +147,7 @@ than the start) record the operator's statement that on this installation, withi
 every Claude Code call that went directly to Anthropic carries a `req_` ID, so a record with no
 request ID was answered by OCX and is costed from OCX's usage log. The policy is stored as meta
 `claudeRoutePolicy` (`basis: operator-cutover`); `off` clears it and an unset variable keeps the stored
-value. It applies at read time only to Claude rows still unknown with `request-id-absent` and
+value. It changes the usage counts only, never costs. It applies at read time only to Claude rows still unknown with `request-id-absent` and
 `from <= at < until`, which then count as OCX with evidence `configured-ocx-cutover`. It never
 applies to `req_` or `ocx-` IDs, unrecognized IDs, `route-unverified`, conflicts, other sources or
 rows outside the window. Stored rows are never rewritten, so removing the policy returns them to
@@ -161,6 +161,28 @@ OCX-routed records are excluded because OCX's own row already counts the call. T
 and the documented OCX response behavior; they cannot authenticate forged logs or infer historical
 proxy versions. A changed source contract needs a parser revision and bounded replay.
 
+Claude Code costs come from OCX's usage log alone. The first time this release opens a history, it
+copies the Claude rows that costs counted until then (route direct) into `native_settled`, keeping
+only what costs read (time, provider, model, input, output and cache-read tokens, stored amount and
+basis), and records the instant in meta `nativeCostsSettledAt`, all in one transaction; later opens
+change nothing. A history too full for the copy under `QUOTA_DB_MAX_MIB` does not open: the error
+says to raise the limit or archive history, and nothing is written, so `scripts/deploy.sh` restores
+the previous release when the health check fails. Costs read Claude transcripts only from that settled copy, so a period keeps the
+total it had: a transcript row that grows, is reread, arrives late or turns direct afterwards never
+reaches it. Settled rows expire with the same retention cutoff as `native_usage`. Collection goes on
+for usage and session data, but computes no price for Claude rows: a new row is stored with basis
+`not-valued` and no amount, a row read again keeps the amount and basis stored for it, and the
+background repricing page skips Claude. Antigravity rows are still valued and still join costs as
+before. `analytics.nativeUsage.claude.includedRequests` counts the settled rows,
+`costsSettledAt` gives the settlement instant, and `unsettledDirectNewRequests` /
+`unsettledDirectPastRequests` count unsettled rows with direct evidence (a `req_` ID) dated at or
+after, and before, that instant, with `unsettledDirectFirstAt` / `unsettledDirectLastAt`. Those
+rows produce one warning that states the counts and dates, that they were not added to costs, and
+that OCX's usage log should be checked for the same calls and the call path reviewed; it does not
+claim the call bypassed OCX, and it names no amount. Each row counts once by its stable ID however
+often it is read. Pending, OCX and conflicting Claude records are diagnosis counts only and produce
+no warning and no cost note.
+
 Only included ledger rows join the existing cost analysis. Costs use the current collection time,
 with OCX rows bounded by their last successful read; native rows continue advancing during an OCX
 outage. Quota calibration, account attribution, coverage and usage periods still use OCX rows alone.
@@ -168,20 +190,18 @@ Native account attribution stays unknown. Missing tariffs retain tokens and unkn
 `analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters.
 `analytics.nativeUsage.{claude,antigravity}` reports source status, pending files, invalid/failed
 records and `includedRequests`/`pendingRequests`/`proxyRequests`/`conflictRequests`, with
-`pendingApiUsd` summing the reference amounts of pending rows only and `unpricedRequests` counting
+`pendingApiUsd` summing the reference amounts of pending Antigravity rows only (null for Claude Code,
+whose transcripts are not valued) and `unpricedRequests` counting
 rows without an amount. `proxyByEvidence`, `pendingByReason` and `conflictByReason` break those counts
 down by evidence value and are always objects. `claude.routePolicy` is `{from, until, basis}` (with
 `until` null when open) or null.
 These counts cover retained history, not the selected cost period. Routine import progress stays in
-the status data. Banners report actual read/format failures, pending records with their counts by
-reason (no request ID, unrecognized request ID, awaiting reread, other), and conflicting records
-separately, and say that the counts cover the retained history. For Claude Code they add that a call
-OCX answered is counted from OCX's usage log instead, which holds its own row for every call it
-answered; that row reaches the total once the log has been collected and priced, and only the
-transcript copy is left out. OCX-routed records produce no banner. A cost period in
-`analytics.costs.periods` carries `nativeExcluded`, the pending and conflicting candidates within
-that period by client (absent when there are none), and the cost screen states them under the
-period's tables. A record without
+the status data. For Antigravity, banners report actual read/format failures, pending records with
+their counts by reason (no request ID, unrecognized request ID, awaiting reread, other), and
+conflicting records separately, and say that the counts cover the retained history. OCX-routed
+records produce no banner. A cost period in `analytics.costs.periods` carries `nativeExcluded`, the
+pending and conflicting Antigravity candidates within that period (absent when there are none), and
+the cost screen states them under the period's tables. A Claude Code record without
 any request ID cannot be joined to its OCX row afterwards: OCX's usage log keeps no message ID or
 upstream request ID, and its `conversationId` is a hash of Claude Code's `metadata.user_id`, which
 transcripts do not store.

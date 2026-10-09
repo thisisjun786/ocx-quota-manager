@@ -66,7 +66,7 @@ CREATE TEMP VIEW IF NOT EXISTS usage_valued AS
 `
 
 var requiredTables = []string{
-	"native_usage", "native_cursors",
+	"native_usage", "native_cursors", "native_settled",
 	"meta", "usage", "samples", "quota_observations", "usage_timings",
 	"cursor_cache_costs", "claude_cache_costs", "identity_epochs",
 	"price_evidence", "usage_prices", "ollama_observations", "collection_logs",

@@ -52,16 +52,12 @@ func routePolicyView(p *store.ClaudeRoutePolicy) *routePolicyStatus {
 	return out
 }
 
-// nativeExclusionWarnings explains why candidates were left out of costs. Proxy rows
-// are OCX's own records and need no explanation. The counts cover the retained
-// history, while the cost screen shows a period, so the text says so; viaOCX adds
-// that a call OCX answered is counted from OCX's usage log instead.
-func nativeExclusionWarnings(label string, s store.NativeSummary, viaOCX bool) []string {
+// nativeExclusionWarnings explains why candidates of a client whose transcripts
+// add to costs (Antigravity) were left out. Proxy rows are OCX's own records and
+// need no explanation. The counts cover the retained history, while the cost
+// screen shows a period, so the text says so.
+func nativeExclusionWarnings(label string, s store.NativeSummary) []string {
 	var out []string
-	ocxNote := ""
-	if viaOCX {
-		ocxNote = " OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계합니다."
-	}
 	if s.Pending > 0 {
 		var reasons []string
 		known := 0
@@ -84,12 +80,40 @@ func nativeExclusionWarnings(label string, s store.NativeSummary, viaOCX bool) [
 		if len(reasons) > 0 {
 			detail = "(" + strings.Join(reasons, ", ") + ")"
 		}
-		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다%s.", label, s.Pending, detail)+ocxNote)
+		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 대화 기록으로는 비용에 더하지 않았습니다%s.", label, s.Pending, detail))
 	}
 	if s.Conflicts > 0 {
-		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 같은 호출의 출처 정보가 서로 달라 대화 기록으로는 비용에 더하지 않았습니다.", label, s.Conflicts)+ocxNote)
+		out = append(out, fmt.Sprintf("%s 기록 %d건(보존 기간 전체)은 같은 호출의 출처 정보가 서로 달라 대화 기록으로는 비용에 더하지 않았습니다.", label, s.Conflicts))
 	}
 	return out
+}
+
+// directEvidenceWarnings reports Claude Code transcript rows that carry an
+// Anthropic request ID (req_) but were not settled into costs. Costs come from
+// OCX's usage log alone. The rows are counted once by ID and not added to
+// costs; no amount is estimated. The text states what the transcript shows and
+// what to check, and makes no claim about the path the call took.
+func directEvidenceWarnings(s store.NativeSummary) []string {
+	n := s.UnsettledDirectNew + s.UnsettledDirectPast
+	if n == 0 || s.UnsettledDirectFirst == nil || s.UnsettledDirectLast == nil {
+		return nil
+	}
+	var kinds []string
+	if s.UnsettledDirectNew > 0 {
+		kinds = append(kinds, fmt.Sprintf("비용 기준 전환 이후 발생 %d건", s.UnsettledDirectNew))
+	}
+	if s.UnsettledDirectPast > 0 {
+		kinds = append(kinds, fmt.Sprintf("전환 이전 시각이지만 늦게 읽힌 기록 %d건", s.UnsettledDirectPast))
+	}
+	when := func(raw string) string {
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return raw
+		}
+		return t.In(displayLocation).Format("01-02 15:04")
+	}
+	return []string{fmt.Sprintf("Claude Code 대화 기록에서 Anthropic 요청 ID(req_)가 남은 응답 %d건(%s, %s~%s)을 확인했습니다. 비용은 OCX 사용 기록으로만 집계하므로 이 기록은 더하지 않았습니다. 같은 호출이 OCX 사용 기록에 있는지와 Claude Code의 호출 경로를 확인하세요.",
+		n, strings.Join(kinds, " · "), when(*s.UnsettledDirectFirst), when(*s.UnsettledDirectLast))}
 }
 
 // annotateNativeExcluded counts, per cost period, the native candidates that period
@@ -205,7 +229,13 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 		}
 		out[source.Client] = s
 		label := labels[source.Client]
-		warnings = append(warnings, nativeExclusionWarnings(label, s.NativeSummary, source.Client == "claude")...)
+		if source.Client == "claude" {
+			// Claude Code transcripts no longer add to costs: their unresolved
+			// routes need no cost warning, only new direct evidence does.
+			warnings = append(warnings, directEvidenceWarnings(s.NativeSummary)...)
+		} else {
+			warnings = append(warnings, nativeExclusionWarnings(label, s.NativeSummary)...)
+		}
 		if s.Status == "error" {
 			warnings = append(warnings, label+" 사용량을 읽지 못했습니다.")
 		} else if s.FailedFiles > 0 {

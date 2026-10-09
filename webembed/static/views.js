@@ -792,15 +792,12 @@ function costPeriod(value) {
     return { hours: n0(o.hours), total: costCell(o.total), providers: costRows(o.providers), models: costRows(o.models), accounts: costRows(o.accounts), nativeExcluded: excluded };
 }
 /**
- * What a cost period leaves out of local tool records, in the period the screen shows. A call OCX
- * answered is counted from OCX's usage log instead, but only as far as that log has been collected
- * and priced, so the note does not promise it is in the total.
+ * What a cost period leaves out of local tool records, in the period the screen shows. Only a
+ * client whose transcripts still add to costs (Antigravity) has any; Claude Code costs come from
+ * OCX's usage log, so its transcripts are never listed.
  */
 export function nativeExcludedNotes(excluded) {
     const notes = [];
-    const claude = excluded.claude ?? 0;
-    if (claude > 0)
-        notes.push(`이 기간 Claude Code 대화 기록 ${count.format(claude)}건은 직접 호출인지 OCX 경유인지 확인할 근거가 없거나 출처가 엇갈려 대화 기록으로는 더하지 않았습니다. OCX를 거친 호출은 대화 기록과 별개로 OCX 사용 기록에서 집계하며, 수집과 가격 확인이 끝난 만큼 위 합계에 반영됩니다.`);
     const antigravity = excluded.antigravity ?? 0;
     if (antigravity > 0)
         notes.push(`이 기간 Antigravity 기록 ${count.format(antigravity)}건은 호출 경로를 확인할 수 없거나 기록 정보가 서로 엇갈려 합계에 더하지 않았습니다.`);

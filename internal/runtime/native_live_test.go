@@ -49,7 +49,13 @@ func TestNativeLocalMetadataProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Rows) == 0 {
+	// Claude Code transcripts are collected without adding to costs, so count
+	// what collection stored, not only the cost rows.
+	collected := len(view.Rows)
+	for _, s := range view.Summary {
+		collected += s.Pending + s.Proxy + s.Conflicts + s.UnsettledDirectNew + s.UnsettledDirectPast
+	}
+	if collected == 0 {
 		t.Fatal("no native records collected")
 	}
 	cur, err := h.NativeCursors("claude")

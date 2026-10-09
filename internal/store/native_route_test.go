@@ -44,6 +44,20 @@ func nativeStored(t *testing.T, h *History, id string) (string, *float64, string
 	return raw, usd, basis
 }
 
+// storedAmount writes the valuation an earlier release stored for a transcript
+// row: an amount with basis official, or none (nil) with basis unknown.
+func storedAmount(t *testing.T, h *History, id string, usd any) {
+	t.Helper()
+	basis := "official"
+	if usd == nil {
+		basis = "unknown"
+	}
+	if _, err := h.db.Exec(`UPDATE native_usage SET usd=?, basis=? WHERE id=?`, usd, basis, id); err != nil {
+		t.Fatal(err)
+	}
+	h.invalidateAll()
+}
+
 func TestNativeDirectReplayKeepsStoredRowIdentical(t *testing.T) {
 	h := openTemp(t)
 	nativeRate(t, h)
@@ -51,10 +65,11 @@ func TestNativeDirectReplayKeepsStoredRowIdentical(t *testing.T) {
 	if err := h.CommitNative("claude", nativeBatch(e), e.At+1000); err != nil {
 		t.Fatal(err)
 	}
-	raw, usd, basis := nativeStored(t, h, e.ID)
-	if usd == nil {
-		t.Fatal("direct row unpriced")
+	if _, usd, basis := nativeStored(t, h, e.ID); usd != nil || basis != NativeNotValued {
+		t.Fatal("new Claude row valued", usd, basis)
 	}
+	storedAmount(t, h, e.ID, .0008125)
+	raw, usd, basis := nativeStored(t, h, e.ID)
 	partial := e
 	partial.Output-- // An earlier streaming snapshot of the same message.
 	if err := h.CommitNative("claude", nativeBatch(partial, e), e.At+1000); err != nil {
@@ -140,12 +155,13 @@ func TestClaudeRoutePolicyIsReadTimeAndScoped(t *testing.T) {
 	setRoutePolicy(t, h, base-1000, &until)
 	v, _ := h.NativeUsage()
 	s := v.Summary["claude"]
-	want := NativeSummary{Included: 1, Pending: 4, Proxy: 3, Unpriced: 0,
+	// The direct row arrived after costs were settled: reported, not added.
+	want := NativeSummary{Pending: 4, Proxy: 3, Unpriced: 8, UnsettledDirectNew: 1,
 		ProxyByEvidence:  map[string]int{"ocx-request-marker": 1, "configured-ocx-cutover": 2},
 		PendingByReason:  map[string]int{"request-id-absent": 2, "request-id-unrecognized": 1, "route-unverified": 1},
 		ConflictByReason: map[string]int{}}
-	s.PendingUSD = nil
-	if !reflect.DeepEqual(s, want) || len(v.Rows) != 1 || v.Rows[0].ID != direct.ID {
+	s.PendingUSD, s.SettledAt, s.UnsettledDirectFirst, s.UnsettledDirectLast, s.unsettledFirst, s.unsettledLast = nil, nil, nil, nil, 0, 0
+	if !reflect.DeepEqual(s, want) || len(v.Rows) != 0 {
 		t.Fatalf("policy summary %+v", s)
 	}
 	if v.ClaudePolicy == nil || v.ClaudePolicy.From != base-1000 || *v.ClaudePolicy.Until != until {
@@ -242,10 +258,8 @@ func TestClaudeEvidenceRereadTargetsRecentFilesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	directID := nativeusage.Hash("native-v1", "claude", "msg_direct")
+	storedAmount(t, h, directID, .0008125)
 	raw, usd, basis := nativeStored(t, h, directID)
-	if usd == nil {
-		t.Fatal("direct row unpriced")
-	}
 	recentKey, oldKey := nativeusage.Hash("claude", recent), nativeusage.Hash("claude", old)
 	cursors, err := h.NativeCursors("claude")
 	if err != nil || cursors[recentKey].Revision != 0 || cursors[oldKey].Revision != nativeusage.Revision {
@@ -599,13 +613,14 @@ func TestNativeViewListsOnlyExcludedCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []NativeExcluded{{"claude", base + 2}, {"claude", base + 3}, {"antigravity", base + 4}}
+	// Claude Code transcripts no longer add to costs, so none of their records
+	// is listed as left out; Antigravity's still are.
+	want := []NativeExcluded{{"antigravity", base + 4}}
 	if !reflect.DeepEqual(v.Excluded, want) {
 		t.Fatalf("%+v", v.Excluded)
 	}
-	// A record the cutover policy attributes to OCX is no longer left out.
 	setRoutePolicy(t, h, base, nil)
-	if v, _ = h.NativeUsage(); !reflect.DeepEqual(v.Excluded, want[1:]) {
+	if v, _ = h.NativeUsage(); !reflect.DeepEqual(v.Excluded, want) {
 		t.Fatalf("policy %+v", v.Excluded)
 	}
 }

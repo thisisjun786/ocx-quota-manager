@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/contract"
 	_ "modernc.org/sqlite"
@@ -80,6 +81,9 @@ func (h *History) init() error {
 		return err
 	}
 	if _, err := h.db.Exec(nativeSchema); err != nil {
+		return err
+	}
+	if err := h.settleNativeCosts(time.Now().UnixMilli()); err != nil {
 		return err
 	}
 	var mode string
@@ -475,6 +479,7 @@ func (h *History) Maintain(now int64) error {
 	return h.Transact(func(tx *sql.Tx) error {
 		cutoffStmts := []string{
 			"DELETE FROM native_usage WHERE at<?",
+			"DELETE FROM native_settled WHERE at<?",
 			"DELETE FROM usage_timings WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM cursor_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",
 			"DELETE FROM claude_cache_costs WHERE id IN (SELECT id FROM usage WHERE at<?)",

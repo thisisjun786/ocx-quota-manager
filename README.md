@@ -71,7 +71,7 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |
 | `QUOTA_CLAUDE_CACHE_TTL`, `QUOTA_CLAUDE_CACHE_FROM` | 5-minute rate | Price Claude cache writes at the 1-hour rate from a given time |
-| `QUOTA_CLAUDE_OCX_FROM`, `QUOTA_CLAUDE_OCX_UNTIL` | unset | From this RFC3339 instant (until the optional exclusive end), Claude Code records without a request ID count as OCX calls; `off` clears the stored setting, unset keeps it |
+| `QUOTA_CLAUDE_OCX_FROM`, `QUOTA_CLAUDE_OCX_UNTIL` | unset | From this RFC3339 instant (until the optional exclusive end), Claude Code records without a request ID are reported as OCX calls in the usage counts; costs are unaffected. `off` clears the stored setting, unset keeps it |
 
 ## Local tool usage
 
@@ -83,15 +83,18 @@ Cost analysis also collects local Claude Code and Antigravity usage metadata. Co
 incremental and bounded. Routine historical imports and unfinished log tails do not produce warning
 banners. Tokscale's hourly totals are not added because they can contain the same calls.
 
-Only native records with routing evidence enter the combined cost. Claude Code records carrying
-an upstream Anthropic request ID and Antigravity generation records are included. Claude Code calls
-answered by OCX (an `ocx-` request ID or an OCX picker model) are already in OCX's own usage log and
-are not counted again. A Claude Code record without a request ID proves no route by itself; when
-every direct call on this installation carries an Anthropic request ID from a known time, set
-`QUOTA_CLAUDE_OCX_FROM` so those records count as OCX calls. Missing prices remain unknown.
-`analytics.nativeUsage.codex.status` is `via-ocx`; the other source statuses describe local
-collection. Warnings report read/format failures and records left out of costs because their route
-is unproven or contradictory, with counts by reason; normal background work produces none.
+Claude Code costs come from OCX's usage log. Claude Code transcripts are still collected for usage
+and session data, but they are no longer valued or added to costs. The transcript rows that costs
+already counted (records carrying an upstream Anthropic request ID) were settled once, with their
+stored amounts, when this release first opened the history, so past periods keep their totals; they
+expire with normal retention. A Claude Code record that carries an Anthropic request ID and was not
+settled is reported in a warning, counted once by its stable ID, split into calls dated after the
+settlement and older records read late; it is not added to costs and no amount is estimated.
+Records without a request ID or with an OCX marker produce no warning. Antigravity generation
+records still enter the combined cost. `analytics.nativeUsage.codex.status` is `via-ocx`; the other
+source statuses describe local collection. Warnings report read/format failures, Antigravity records
+left out of costs because their route is unproven or contradictory, and new Claude Code direct
+evidence; normal background work produces none.
 
 Native source identities are hashed, repeated/streamed records are reconciled, and conflicting
 evidence stays excluded even after replay. Source transcripts and databases are never changed. Native
