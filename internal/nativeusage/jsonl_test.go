@@ -72,6 +72,37 @@ func TestClaudeRouteAndTokenSemantics(t *testing.T) {
 	}
 }
 
+func TestClaudeRouteEvidence(t *testing.T) {
+	line := func(model string, request any) []byte {
+		row := map[string]any{"type": "assistant", "timestamp": nativeAt, "message": map[string]any{"id": "msg_route", "model": model, "usage": map[string]any{"input_tokens": 10, "output_tokens": 5}}}
+		if request != nil {
+			row["requestId"] = request
+		}
+		b, _ := json.Marshal(row)
+		return b
+	}
+	for _, tc := range []struct {
+		model    string
+		request  any
+		route    Route
+		evidence string
+	}{
+		{"claude-test", "req_0123456789abcdef", Direct, "anthropic-request-header"},
+		{"claude-test", "ocx-0123456789abcdef0123456789abcdef", Proxy, "ocx-request-marker"},
+		{"ocx-claude-native--gpt-6.1-sol", nil, Proxy, "ocx-model-alias"},
+		{"ocx-claude-native--gpt-6.1-sol", "req_0123456789abcdef", Proxy, "ocx-model-alias"},
+		{"claude-test", nil, Unknown, "request-id-absent"},
+		{"claude-test", "", Unknown, "request-id-absent"},
+		{"claude-test", "req_short", Unknown, "request-id-unrecognized"},
+		{"claude-test", "msg_0123456789abcdef", Unknown, "request-id-unrecognized"},
+	} {
+		got := ParseLine("claude", line(tc.model, tc.request), &State{})
+		if got.Invalid || got.Event == nil || got.Event.Route != tc.route || got.Event.Evidence != tc.evidence || got.Event.Model != tc.model {
+			t.Fatalf("%v %v: %+v", tc.model, tc.request, got.Event)
+		}
+	}
+}
+
 func codexLine(total, last Counts) []byte {
 	b, _ := json.Marshal(map[string]any{"type": "event_msg", "timestamp": nativeAt, "payload": map[string]any{"type": "token_count", "info": map[string]any{"total_token_usage": total, "last_token_usage": last}}})
 	return b

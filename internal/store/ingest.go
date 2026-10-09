@@ -10,11 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // Replay newly supported prices without reopening settled tariffs. Keep this
 // separate from TariffRevision, whose replay can replace existing amounts.
-const conditionalPriceReplayVersion = "v2-haiku55"
+const conditionalPriceReplayVersion = "v3-anthropic-native"
 
 type UsageCursor struct {
 	Ino         string `json:"ino"`
@@ -145,6 +146,7 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 				}
 				account := attributedAccount(provider, row, identities)
 				provider = usageProvider(provider)
+				price := PriceProvider(provider)
 				model, _ := row["model"].(string)
 				usage, _ := row["usage"].(map[string]any)
 				input := numPtr(usage, "inputTokens")
@@ -155,7 +157,7 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 					sum := *input + *output
 					tokens = &sum
 				}
-				quote := quoteIngest(provider, model, entry.Timestamp, row, evidence, catalog)
+				quote := quoteIngest(price, model, entry.Timestamp, row, evidence, catalog)
 				result, err := tx.Exec(`INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?,?,?)
 					ON CONFLICT(id) DO NOTHING`,
 					id, entry.Timestamp, provider, account, nilIfEmpty(model), input, output, cached, tokens, quote.usd, quote.basis)
@@ -169,7 +171,7 @@ func (h *History) IngestJSONL(path string, now int64) (int, error) {
 				if created == 0 {
 					touched = append(touched, id)
 				}
-				if err := settleIngest(tx, created > 0, id, entry.Timestamp, provider, model, input, output, cached, tokens, quote, now, repricing && repriceRow(provider, model, row)); err != nil {
+				if err := settleIngest(tx, created > 0, id, entry.Timestamp, provider, model, input, output, cached, tokens, quote, now, repricing && repriceRow(price, model, row), repricing); err != nil {
 					return err
 				}
 				// A replay may restore a proven log label on an otherwise identical row.
@@ -314,4 +316,23 @@ func usageProvider(raw string) string {
 		return "openai"
 	}
 	return provider
+}
+
+// PriceProvider names the tariff family that values a stored provider. Only
+// "anthropic-native" differs: it is Claude Code's own login relayed by OCX, so
+// Anthropic's tariffs apply while the stored provider, and with it account and
+// quota attribution, stays separate.
+func PriceProvider(provider string) string {
+	if provider == "anthropic-native" {
+		return "anthropic"
+	}
+	return provider
+}
+
+// OCXAlias reports an OCX picker alias (ocx-…) under Anthropic pricing. OCX
+// answered such a call with another provider and records it under that
+// provider, so no Anthropic tariff, catalog row or evidence row may value it,
+// even as a reference amount.
+func OCXAlias(priceProvider, model string) bool {
+	return priceProvider == "anthropic" && strings.HasPrefix(model, "ocx-")
 }

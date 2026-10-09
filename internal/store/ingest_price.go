@@ -23,8 +23,14 @@ type ingestQuote struct {
 }
 
 func finiteToken(v float64) bool { return v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// quoteIngest prices one row; provider is the price provider (PriceProvider of
+// the stored provider), which selects evidence and tariffs.
 func quoteIngest(provider, model string, at int64, row map[string]any, evidence []Evidence, catalog ...*Catalog) ingestQuote {
 	q := ingestQuote{basis: UnknownInputBasis}
+	if OCXAlias(provider, model) {
+		return q
+	}
 	u, _ := row["usage"].(map[string]any)
 	input, output := numPtr(u, "inputTokens"), numPtr(u, "outputTokens")
 	if input == nil || output == nil || !finiteToken(*input) || !finiteToken(*output) {
@@ -199,7 +205,7 @@ func quoteIngest(provider, model string, at int64, row map[string]any, evidence 
 	return q
 }
 
-func settleIngest(tx *sql.Tx, created bool, id string, at int64, provider, model string, input, output, cached, tokens *float64, q ingestQuote, now int64, reprice bool) error {
+func settleIngest(tx *sql.Tx, created bool, id string, at int64, provider, model string, input, output, cached, tokens *float64, q ingestQuote, now int64, reprice, backfill bool) error {
 	if q.usd == nil {
 		return nil
 	}
@@ -254,7 +260,10 @@ func settleIngest(tx *sql.Tx, created bool, id string, at int64, provider, model
 			return err
 		}
 	}
-	if q.hour != nil && q.write > 0 && *q.usd > 0 {
+	// A tariff-generation replay (backfill) adds cache coefficients to matching
+	// settled rows; a fill-only replay adds them only to rows it creates or
+	// fills, so a settled row's read-time valuation stays put.
+	if q.hour != nil && q.write > 0 && *q.usd > 0 && (created || updated > 0 || backfill) {
 		_, err = tx.Exec(`INSERT OR IGNORE INTO claude_cache_costs(id,fiveMinuteUsd,oneHourUsd,cacheWriteTokens) SELECT id,?,?,?`+where, append([]any{q.usd, q.hour, q.write}, args...)...)
 	}
 	return err

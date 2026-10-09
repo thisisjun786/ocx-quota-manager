@@ -40,6 +40,9 @@ type Event struct {
 	Evidence                                           string
 	ParserRevision                                     int   `json:",omitempty"`
 	ModelEnum                                          int64 `json:",omitempty"`
+	// Unproven marks a counter conflict among snapshots that proved no route;
+	// a later route proof decides it (see store.mergeNative).
+	Unproven bool `json:",omitempty"`
 }
 
 func Hash(parts ...string) string {

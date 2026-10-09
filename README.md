@@ -71,6 +71,7 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |
 | `QUOTA_CLAUDE_CACHE_TTL`, `QUOTA_CLAUDE_CACHE_FROM` | 5-minute rate | Price Claude cache writes at the 1-hour rate from a given time |
+| `QUOTA_CLAUDE_OCX_FROM`, `QUOTA_CLAUDE_OCX_UNTIL` | unset | From this RFC3339 instant (until the optional exclusive end), Claude Code records without a request ID count as OCX calls; `off` clears the stored setting, unset keeps it |
 
 ## Local tool usage
 
@@ -83,9 +84,14 @@ incremental and bounded. Routine historical imports and unfinished log tails do 
 banners. Tokscale's hourly totals are not added because they can contain the same calls.
 
 Only native records with routing evidence enter the combined cost. Claude Code records carrying
-an upstream Anthropic request ID and Antigravity generation records are included. Missing prices
-remain unknown. `analytics.nativeUsage.codex.status` is `via-ocx`; the other source statuses describe
-local collection. Warnings report actual read/format failures rather than normal background work.
+an upstream Anthropic request ID and Antigravity generation records are included. Claude Code calls
+answered by OCX (an `ocx-` request ID or an OCX picker model) are already in OCX's own usage log and
+are not counted again. A Claude Code record without a request ID proves no route by itself; when
+every direct call on this installation carries an Anthropic request ID from a known time, set
+`QUOTA_CLAUDE_OCX_FROM` so those records count as OCX calls. Missing prices remain unknown.
+`analytics.nativeUsage.codex.status` is `via-ocx`; the other source statuses describe local
+collection. Warnings report read/format failures and records left out of costs because their route
+is unproven or contradictory, with counts by reason; normal background work produces none.
 
 Native source identities are hashed, repeated/streamed records are reconciled, and conflicting
 evidence stays excluded even after replay. Source transcripts and databases are never changed. Native

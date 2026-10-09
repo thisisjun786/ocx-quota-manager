@@ -69,21 +69,32 @@ func parseClaude(line []byte) ParseResult {
 			return ParseResult{Invalid: true}
 		}
 	}
-	route, evidence := Unknown, "route-unverified"
-	// Current OCX Messages responses do not forward the upstream request-id.
-	// Claude Code's requestId is captured from that response header, whereas
-	// message.id may be preserved even by OCX passthrough and proves no route.
-	if anthropicRequest.MatchString(row.RequestID) {
-		route, evidence = Direct, "anthropic-request-header"
-	}
-	if strings.HasPrefix(row.RequestID, "ocx-") {
-		route, evidence = Proxy, "ocx-request-marker"
-	}
+	route, evidence := claudeRoute(row.Message.Model, row.RequestID)
 	e := Event{ID: Hash("native-v1", "claude", row.Message.ID), Client: "claude", Provider: "anthropic", PriceProvider: "anthropic", Model: Model(row.Message.Model), At: at.UnixMilli(), Input: *u.Input + u.Read + u.Write, Output: *u.Output, CacheRead: u.Read, CacheWrite: u.Write, CacheWrite1h: u.Cache.Hour, Tier: u.Tier, Route: route, Evidence: evidence}
 	if *u.Input < 0 || !e.Valid() {
 		return ParseResult{Invalid: true}
 	}
 	return ParseResult{Event: &e}
+}
+
+// Claude Code's requestId is captured from the response's request-id header.
+// Anthropic answers with req_ IDs and logged OCX responses with ocx- IDs;
+// message.id may be preserved even by OCX passthrough and proves no route.
+// An ocx- model is an OCX picker alias that Anthropic cannot serve. Stored
+// rows from parser revision 1 carry "route-unverified" for both absent and
+// unrecognized IDs.
+func claudeRoute(model, requestID string) (Route, string) {
+	switch {
+	case strings.HasPrefix(model, "ocx-"):
+		return Proxy, "ocx-model-alias"
+	case anthropicRequest.MatchString(requestID):
+		return Direct, "anthropic-request-header"
+	case strings.HasPrefix(requestID, "ocx-"):
+		return Proxy, "ocx-request-marker"
+	case requestID == "":
+		return Unknown, "request-id-absent"
+	}
+	return Unknown, "request-id-unrecognized"
 }
 
 func parseCodex(line []byte, state *State) ParseResult {

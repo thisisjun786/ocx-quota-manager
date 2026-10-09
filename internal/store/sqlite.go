@@ -148,6 +148,11 @@ func (h *History) SetMeta(key string, value any) error {
 	if key == "claudeCacheAssumption" || key == "cursorCacheReference" {
 		h.invalidateUsage()
 	}
+	if key == ClaudeRoutePolicyKey {
+		h.cacheMu.Lock()
+		h.native = nil
+		h.cacheMu.Unlock()
+	}
 	return err
 }
 

@@ -101,7 +101,15 @@ not an input. SQLite reads use a consistent read-only transaction including comm
 progress with the associated candidates. Stable response/message identities exclude paths, so a copied
 transcript or database cannot add another call. Claude streaming updates may increase a token vector;
 older copies cannot reduce it. Contradictory identities/routes or incomparable counters produce a
-sticky conflict.
+sticky conflict. A route proven by any snapshot covers every snapshot of the message before counters
+are compared. Snapshots that prove no route and disagree form an unproven conflict that keeps the
+later vector: a later direct proof makes it final, and a later OCX proof settles it as OCX's. OCX-routed records are the exception for counters: a converted OCX stream opens with
+OCX's prompt estimate and ends with the upstream's count, cached input split out, so its snapshots
+need not grow together. Two OCX snapshots of one message keep the later one (more output, then more
+cached input), whatever the merge order. An `ocx-` model proves the route whatever request ID a record
+carried, so every record of that model, including rows stored before the parser knew aliases and rows
+demoted only for their counters, is OCX's. A contradictory source, such as the same message also seen
+with another model, provider or tier, is final in any order. None of these enters costs.
 Antigravity parser revision 2 treats usage field 1 as a model enum, not input tokens,
 and skips model-only metadata. A revision change rereads unchanged databases in bounded batches.
 Only an observation reproducing the complete legacy token vector authorizes subtracting its enum
@@ -112,14 +120,44 @@ or lower a previously completed output; conflicts stay excluded.
 Input includes cached tokens; output already includes reasoning. Explicit Claude one-hour cache writes
 are priced at their own rate, independently of OCX's configurable cache assumption.
 
-Attribution is conservative: the current OCX Messages response does not forward Anthropic's
-`request-id` header, whereas Claude Code captures it in assistant `requestId`. An upstream `req_`
-ID is the supported direct-call signal; a `msg_` ID alone is not. Antigravity generation metadata
-identifies its direct service. The deployment owner has established that all Codex calls use OCX.
+Attribution is conservative. Claude Code captures the response's `request-id` header in assistant
+`requestId`. Anthropic answers with `req_` IDs; OCX answers every logged Messages call with
+`ocx-<32 hex>`, equal to the `requestId` of its own usage-log row. OCX's relay-native intercept path
+writes no OCX row and forwards Anthropic's `req_` ID. A `msg_` ID alone proves nothing, since OCX
+passthrough may preserve it. Claude records are classified in this order, each with a stored evidence value:
+
+| Record | Route | Evidence |
+|---|---|---|
+| model starts with `ocx-` (an OCX picker alias Anthropic cannot serve) | OCX | `ocx-model-alias` |
+| `requestId` matches `req_` + 16–128 alphanumerics | direct | `anthropic-request-header` |
+| `requestId` starts with `ocx-` | OCX | `ocx-request-marker` |
+| `requestId` absent or empty | unknown | `request-id-absent` |
+| any other `requestId` | unknown | `request-id-unrecognized` |
+
+Rows stored by Claude parser revision 1 carry `route-unverified` for both unknown cases. Once per
+database (meta `nativeEvidenceV2:claude`), Claude transcripts whose last scanned modification is no
+older than one hour before the earliest such row are reread through the normal cursor path; older
+files cannot contain them. A reread replaces `route-unverified` with the specific reason, and an
+unrecognized ID outweighs an absent one. Rows whose source file no longer exists keep
+`route-unverified`. Rereading an already priced direct row leaves its event, amount and basis
+unchanged. An `ocx-` model is never valued at Anthropic rates, even as a reference amount.
+
+`QUOTA_CLAUDE_OCX_FROM` (RFC3339 with zone) and optional `QUOTA_CLAUDE_OCX_UNTIL` (exclusive, later
+than the start) record the operator's statement that on this installation, within that window,
+every Claude Code call that went directly to Anthropic carries a `req_` ID, so a record with no
+request ID was answered by OCX and is costed from OCX's usage log. The policy is stored as meta
+`claudeRoutePolicy` (`basis: operator-cutover`); `off` clears it and an unset variable keeps the stored
+value. It applies at read time only to Claude rows still unknown with `request-id-absent` and
+`from <= at < until`, which then count as OCX with evidence `configured-ocx-cutover`. It never
+applies to `req_` or `ocx-` IDs, unrecognized IDs, `route-unverified`, conflicts, other sources or
+rows outside the window. Stored rows are never rewritten, so removing the policy returns them to
+pending. Token similarity to OCX rows is not used as route proof.
+
+Antigravity generation metadata identifies its direct service. The deployment owner has established that all Codex calls use OCX.
 OCX usage is therefore the sole source for Codex accounting; native Codex transcripts are not scanned.
 Legacy Codex ledger rows remain retained but are filtered from all native cost/summary reads, including
 any older row marked direct. They cannot create an additional charge, pending amount or warning.
-Explicit OCX provider/request markers are excluded. These rules assume unmodified local source logs
+OCX-routed records are excluded because OCX's own row already counts the call. These rules assume unmodified local source logs
 and the documented OCX response behavior; they cannot authenticate forged logs or infer historical
 proxy versions. A changed source contract needs a parser revision and bounded replay.
 
@@ -129,9 +167,15 @@ outage. Quota calibration, account attribution, coverage and usage periods still
 Native account attribution stays unknown. Missing tariffs retain tokens and unknown dollars.
 `analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters.
 `analytics.nativeUsage.{claude,antigravity}` reports source status, pending files, invalid/failed
-records and included/pending/proxy/conflict counts, with a pending API-equivalent amount when priced.
+records and `includedRequests`/`pendingRequests`/`proxyRequests`/`conflictRequests`, with
+`pendingApiUsd` summing the reference amounts of pending rows only and `unpricedRequests` counting
+rows without an amount. `proxyByEvidence`, `pendingByReason` and `conflictByReason` break those counts
+down by evidence value and are always objects. `claude.routePolicy` is `{from, until, basis}` (with
+`until` null when open) or null.
 These counts cover retained history, not the selected cost period. Routine import progress stays in
-the status data. Banners are reserved for actual failures and unresolved conflicting usage.
+the status data. Banners report actual read/format failures, pending records with their counts by
+reason (no request ID, unrecognized request ID, awaiting reread, other), and conflicting records
+separately. OCX-routed records produce no banner.
 Both confirmed and pending candidates follow the configured history retention/reset boundaries.
 
 Scanning is bounded per source and resumes across collection cycles/restarts. A partial JSONL tail

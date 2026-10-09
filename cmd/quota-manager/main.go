@@ -37,6 +37,10 @@ func main() {
 		_ = hist.Close()
 		log.Fatal(err)
 	}
+	if err := configureClaudeRoute(hist, os.Getenv("QUOTA_CLAUDE_OCX_FROM"), os.Getenv("QUOTA_CLAUDE_OCX_UNTIL")); err != nil {
+		_ = hist.Close()
+		log.Fatal(err)
+	}
 	rt := runtime.New(clock.System{}, hist, collect.NewHTTPSTransport())
 	rt.Home = home
 	rt.CodexHome = env("QUOTA_CODEX_HOME", env("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex")))

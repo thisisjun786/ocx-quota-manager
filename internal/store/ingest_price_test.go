@@ -146,3 +146,61 @@ func TestIngestParentTierAndCanonicalProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestFillOnlyReplayKeepsSettledCacheValuation(t *testing.T) {
+	dir := t.TempDir()
+	h, err := Open(dir, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { h.Close() }()
+	at := int64(1800000000000)
+	if _, err = h.InsertEvidence(Evidence{Provider: "anthropic", Model: "m", Status: "official", SourceURL: cachePtr(claudePriceSource), Rates: [4]*float64{cachePtr(10.0), cachePtr(50.0), cachePtr(.25), cachePtr(12.5)}, Conditions: []string{"cache-write-assumed"}, FirstRevision: "test", FirstSeenAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.SetMeta("claudeCacheAssumption", map[string]any{"ttl": "1h", "from": at}); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "usage.jsonl")
+	writeUsageLog(t, log, []map[string]any{{"timestamp": at, "requestId": "settled", "provider": "anthropic", "model": "m", "usage": map[string]any{"inputTokens": 1000, "outputTokens": 100, "cacheReadInputTokens": 200, "cacheCreationInputTokens": 300}}})
+	if _, err = h.IngestJSONL(log, at); err != nil {
+		t.Fatal(err)
+	}
+	// A row settled before its cache coefficients existed: same amount as today's quote, no sidecar.
+	if _, err = h.db.Exec(`DELETE FROM claude_cache_costs`); err != nil {
+		t.Fatal(err)
+	}
+	h.invalidateUsage()
+	valued := func() (float64, int) {
+		rows, err := h.ListUsage()
+		if err != nil || len(rows) != 1 || rows[0].USD == nil {
+			t.Fatal(rows, err)
+		}
+		var n int
+		h.db.QueryRow(`SELECT count(*) FROM claude_cache_costs`).Scan(&n)
+		return *rows[0].USD, n
+	}
+	if usd, n := valued(); math.Abs(usd-.0138) > 1e-12 || n != 0 {
+		t.Fatal("setup", usd, n)
+	}
+	// Fill-only replays (conditional price version, catalog revision) leave it alone.
+	if err = h.SetMeta("conditionalPriceReplay", "v2-haiku55"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.IngestJSONL(log, at); err != nil {
+		t.Fatal(err)
+	}
+	if usd, n := valued(); math.Abs(usd-.0138) > 1e-12 || n != 0 {
+		t.Fatal("fill-only replay revalued a settled row", usd, n)
+	}
+	// A tariff-generation replay backfills the coefficients of matching settled rows.
+	if err = h.SetMeta("tariffRevision", "older"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.IngestJSONL(log, at); err != nil {
+		t.Fatal(err)
+	}
+	if usd, n := valued(); math.Abs(usd-.01605) > 1e-12 || n != 1 {
+		t.Fatal("tariff replay did not backfill", usd, n)
+	}
+}

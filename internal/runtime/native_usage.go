@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/thisisjun786/ocx-quota-manager/internal/calc"
@@ -28,6 +29,61 @@ type nativeStatus struct {
 	FailedFiles    int    `json:"failedFiles"`
 	ObservedAt     string `json:"observedAt"`
 	store.NativeSummary
+	// Set only on Claude Code, where a typed nil pointer encodes as null;
+	// other sources omit it.
+	RoutePolicy any `json:"routePolicy,omitempty"`
+}
+
+type routePolicyStatus struct {
+	From  string  `json:"from"`
+	Until *string `json:"until"`
+	Basis string  `json:"basis"`
+}
+
+func routePolicyView(p *store.ClaudeRoutePolicy) *routePolicyStatus {
+	if p == nil {
+		return nil
+	}
+	out := &routePolicyStatus{From: time.UnixMilli(p.From).UTC().Format(time.RFC3339Nano), Basis: "operator-cutover"}
+	if p.Until != nil {
+		until := time.UnixMilli(*p.Until).UTC().Format(time.RFC3339Nano)
+		out.Until = &until
+	}
+	return out
+}
+
+// nativeExclusionWarnings explains why candidates were left out of costs. Proxy rows
+// are OCX's own records and need no explanation.
+func nativeExclusionWarnings(label string, s store.NativeSummary) []string {
+	var out []string
+	if s.Pending > 0 {
+		var reasons []string
+		known := 0
+		for _, r := range []struct{ key, text string }{
+			{"request-id-absent", "요청 ID 없음"}, {"request-id-unrecognized", "알 수 없는 요청 ID"}, {"route-unverified", "재확인 대기"},
+		} {
+			if n := s.PendingByReason[r.key]; n > 0 {
+				reasons = append(reasons, fmt.Sprintf("%s %d건", r.text, n))
+				known += n
+			}
+		}
+		other := 0
+		for _, n := range s.PendingByReason {
+			other += n
+		}
+		if other -= known; other > 0 {
+			reasons = append(reasons, fmt.Sprintf("기타 %d건", other))
+		}
+		detail := ""
+		if len(reasons) > 0 {
+			detail = "(" + strings.Join(reasons, ", ") + ")"
+		}
+		out = append(out, fmt.Sprintf("%s 기록 %d건은 직접 호출인지 OCX 경유인지 확인할 근거가 없어 비용에서 제외했습니다%s.", label, s.Pending, detail))
+	}
+	if s.Conflicts > 0 {
+		out = append(out, fmt.Sprintf("%s 기록 %d건은 같은 호출의 출처 정보가 서로 달라 비용에서 제외했습니다.", label, s.Conflicts))
+	}
+	return out
 }
 
 func (rt *Runtime) markFailureWithNative(ctx context.Context, now time.Time) {
@@ -72,9 +128,12 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 	// This deployment's Codex traffic is entirely routed through OCX. Its
 	// authoritative usage is already ingested there; reading the local client
 	// transcripts would duplicate the same calls and create false exclusions.
-	out["codex"] = nativeStatus{Status: "via-ocx", ObservedAt: now.UTC().Format(time.RFC3339Nano)}
+	out["codex"] = nativeStatus{Status: "via-ocx", ObservedAt: now.UTC().Format(time.RFC3339Nano), NativeSummary: store.NativeSummary{}.Complete()}
 	for _, source := range sources {
-		s := nativeStatus{Status: "absent", ObservedAt: now.UTC().Format(time.RFC3339Nano)}
+		s := nativeStatus{Status: "absent", ObservedAt: now.UTC().Format(time.RFC3339Nano), NativeSummary: store.NativeSummary{}.Complete()}
+		if source.Client == "claude" {
+			s.RoutePolicy = (*routePolicyStatus)(nil)
+		}
 		cursors, err := h.NativeCursors(source.Client)
 		if err == nil {
 			var b nativeusage.Batch
@@ -112,12 +171,13 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 	labels := map[string]string{"claude": "Claude Code", "antigravity": "Antigravity"}
 	for _, source := range sources {
 		s := out[source.Client]
-		s.NativeSummary = view.Summary[source.Client]
+		s.NativeSummary = view.Summary[source.Client].Complete()
+		if source.Client == "claude" {
+			s.RoutePolicy = routePolicyView(view.ClaudePolicy)
+		}
 		out[source.Client] = s
 		label := labels[source.Client]
-		if s.Pending+s.Conflicts > 0 {
-			warnings = append(warnings, fmt.Sprintf("%s 사용 기록 %d건을 확인해야 합니다.", label, s.Pending+s.Conflicts))
-		}
+		warnings = append(warnings, nativeExclusionWarnings(label, s.NativeSummary)...)
 		if s.Status == "error" {
 			warnings = append(warnings, label+" 사용량을 읽지 못했습니다.")
 		} else if s.FailedFiles > 0 {

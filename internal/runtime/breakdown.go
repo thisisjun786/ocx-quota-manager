@@ -62,11 +62,14 @@ func (c *costCell) add(u store.Usage, p calc.AppliedPrice) {
 }
 
 type costRow struct {
-	Key        string  `json:"key"`
-	Provider   string  `json:"provider"`
-	Name       string  `json:"name"`
-	Configured *bool   `json:"configured,omitempty"`
-	Share      float64 `json:"share"`
+	Key        string `json:"key"`
+	Provider   string `json:"provider"`
+	Name       string `json:"name"`
+	Configured *bool  `json:"configured,omitempty"`
+	// PriceProvider names the tariff family that valued a row whose provider is a
+	// routing label (anthropic-native is valued with Anthropic's tariffs).
+	PriceProvider string  `json:"priceProvider,omitempty"`
+	Share         float64 `json:"share"`
 	costCell
 }
 
@@ -86,6 +89,11 @@ type costDay struct {
 	Requests   int                `json:"requests"`
 	ByProvider map[string]float64 `json:"byProvider"`
 }
+
+// routedProvider is OCX's label for Claude Code's own login relayed through OCX.
+// It is neither a configured nor a removed provider, and it has no accounts.
+const routedProvider = "anthropic-native"
+const routedProviderName = "Claude Code 로그인 (OCX 경유)"
 
 func isoMillis(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
@@ -124,19 +132,29 @@ func costBreakdown(rows []store.Usage, prices []calc.AppliedPrice, providers []c
 			}
 			return r
 		}
+		// priced marks the tariff family on provider and model rows only.
+		priced := func(r *costRow) *costRow {
+			if p := store.PriceProvider(r.Provider); p != r.Provider {
+				r.PriceProvider = p
+			}
+			return r
+		}
 		for i := start; i < len(rows) && rows[i].At <= now; i++ {
 			u, p := rows[i], prices[i]
 			total.add(u, p)
 			pname := names[u.Provider]
 			if pname == "" {
 				pname = u.Provider
+				if u.Provider == routedProvider {
+					pname = routedProviderName
+				}
 			}
-			get(byProvider, u.Provider, u.Provider, pname).add(u, p)
+			priced(get(byProvider, u.Provider, u.Provider, pname)).add(u, p)
 			model := "(unknown)"
 			if u.Model != nil && *u.Model != "" {
 				model = *u.Model
 			}
-			get(byModel, u.Provider+"/"+model, u.Provider, model).add(u, p)
+			priced(get(byModel, u.Provider+"/"+model, u.Provider, model)).add(u, p)
 			account, label := "", "계정 미확인"
 			if u.Account != nil && *u.Account != "" {
 				account = *u.Account
@@ -178,7 +196,7 @@ func removedProviders(rows []store.Usage, prices []calc.AppliedPrice, names map[
 	by := map[string]*removedProvider{}
 	for i := start; i < len(rows) && rows[i].At <= now; i++ {
 		u := rows[i]
-		if _, ok := names[u.Provider]; ok || u.Provider == "unknown" || u.Provider == "" {
+		if _, ok := names[u.Provider]; ok || u.Provider == "unknown" || u.Provider == "" || u.Provider == routedProvider {
 			continue
 		}
 		r := by[u.Provider]
@@ -220,7 +238,7 @@ func finishRows(m map[string]*costRow, total float64, names map[string]string) [
 		if total > 0 {
 			r.Share = r.APIUsd / total
 		}
-		if names != nil && r.Provider != "unknown" {
+		if names != nil && r.Provider != "unknown" && r.Provider != routedProvider {
 			_, ok := names[r.Provider]
 			configured := ok
 			r.Configured = &configured

@@ -991,6 +991,10 @@ export function costsView(ctx) {
         .sort((a, b) => series.buckets.reduce((s, d) => s + (d.byProvider[b] ?? 0), 0) - series.buckets.reduce((s, d) => s + (d.byProvider[a] ?? 0), 0));
     const colour = providerColours(providerOrder);
     const names = new Map((ctx.snapshot?.providers ?? []).map(p => [p.id, p.name]));
+    // A provider the roster does not name (anthropic-native) keeps the server's label in the chart and every table.
+    for (const r of period?.providers ?? [])
+        if (!names.has(r.provider))
+            names.set(r.provider, r.name);
     if (series.buckets.length)
         section.append(bucketChart(series, providerOrder, colour, names, label));
     if (period) {
