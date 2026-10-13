@@ -62,6 +62,7 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_HOST`, `QUOTA_PORT` | `127.0.0.1`, `8787` | Where the server listens |
 | `QUOTA_PUBLIC_ORIGIN` | unset | Origin allowed when served through a proxy |
 | `QUOTA_DATA_DIR` | `~/.local/state/quota-monitor` | SQLite history (quota readings and normalized usage) |
+| `QUOTA_DB_MAX_MIB` | `512` | SQLite database size limit in MiB. Raising it permits growth without deleting records; lowering it below the current size refuses startup. |
 | `OPENCODEX_HOME` | `~/.opencodex` | OpenCodex config and usage log, read only |
 | `QUOTA_CODEX_HOME` | `$CODEX_HOME` or `~/.codex` | Codex account files, read only |
 | `QUOTA_CLAUDE_HOME` | `~/.claude` | Claude account files and local usage transcripts, read only |

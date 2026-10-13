@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -29,7 +30,11 @@ func main() {
 	}
 	home := env("OPENCODEX_HOME", filepath.Join(os.Getenv("HOME"), ".opencodex"))
 	data := env("QUOTA_DATA_DIR", filepath.Join(first(os.Getenv("XDG_STATE_HOME"), filepath.Join(os.Getenv("HOME"), ".local/state")), "quota-monitor"))
-	hist, err := store.Open(data, store.OpenOptions{})
+	storage, err := historyOptions(os.Getenv("QUOTA_DB_MAX_MIB"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	hist, err := store.Open(data, storage)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -86,6 +91,19 @@ func main() {
 	if err := rt.Close(shut); err != nil {
 		os.Exit(1)
 	}
+}
+
+// Keep the store's default unless the operator explicitly raises or lowers it.
+func historyOptions(raw string) (store.OpenOptions, error) {
+	if raw == "" {
+		return store.OpenOptions{}, nil
+	}
+	const maxMiB = int64(1<<63-1) / (1 << 20)
+	mib, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || mib < 1 || mib > maxMiB {
+		return store.OpenOptions{}, fmt.Errorf("QUOTA_DB_MAX_MIB must be a positive integer no greater than %d", maxMiB)
+	}
+	return store.OpenOptions{MaxBytes: mib * (1 << 20)}, nil
 }
 
 func env(k, fallback string) string {
