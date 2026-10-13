@@ -224,10 +224,8 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	}
 	usageStatus, ingestErr := rt.ingestUsage(now)
 	nativeStatus, nativeWarnings := rt.collectNative(ctx, now)
-	if ingestErr == nil {
-		if err := MaintainIfDue(rt.Store, now); err != nil {
-			storeFailed = true
-		}
+	if err := MaintainIfDue(rt.Store, now); err != nil {
+		storeFailed = true
 	}
 	var hist usageStore
 	if us, ok := rt.Store.(usageStore); ok {
@@ -273,7 +271,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		ObservedAt:             &iso,
 		Source:                 &src,
 		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
-		Warnings:               append(local.Warnings, nativeWarnings...),
+		Warnings:               append(append(local.Warnings, nativeWarnings...), storageWarnings(rt.Store)...),
 		Providers:              providers,
 		Analytics:              analytics,
 	})
