@@ -85,6 +85,8 @@ type NativeView struct {
 	// transcripts still add to costs (Antigravity), so a cost period can say how
 	// many it left out. Claude Code transcripts no longer add to costs.
 	Excluded []NativeExcluded
+	// settledRows counts the settled Claude Code rows that lead Rows.
+	settledRows int
 }
 
 type NativeExcluded struct {
@@ -273,6 +275,12 @@ func (h *History) CommitNative(client string, b nativeusage.Batch, now int64) er
 	catalog, _ := h.catalogForIngest()
 	cutoff := h.NativeCutoff(now)
 	changed := false
+	// Antigravity transcripts grow on every cycle while a session runs. Their
+	// part of the cached view is read again on its own instead of every stored
+	// row; the Claude Code part stays.
+	h.cacheMu.Lock()
+	view := h.native
+	h.cacheMu.Unlock()
 	err := h.transact(func(tx *sql.Tx) error {
 		evidence, err := listEvidence(tx)
 		if err != nil {
@@ -353,7 +361,12 @@ func (h *History) CommitNative(client string, b nativeusage.Batch, now int64) er
 	})
 	if err == nil && changed {
 		h.cacheMu.Lock()
-		h.native = nil
+		var next *NativeView
+		// Only the view read before this write may keep its Claude Code part.
+		if client != "claude" && view != nil && h.native == view {
+			next = view.rereadCostClients(h.db)
+		}
+		h.native = next
 		h.cacheMu.Unlock()
 	}
 	return err
@@ -587,15 +600,6 @@ func (h *History) NativeUsage() (NativeView, error) {
 		}
 	}
 	v := NativeView{Rows: []Usage{}, Summary: map[string]NativeSummary{}, ClaudePolicy: policy}
-	row := func(id string, at int64, raw string, usd *float64, basis string) error {
-		var e nativeusage.Event
-		if err := json.Unmarshal([]byte(raw), &e); err != nil {
-			return err
-		}
-		in, out, read, tokens := float64(e.Input), float64(e.Output), float64(e.CacheRead), float64(e.Input+e.Output)
-		v.Rows = append(v.Rows, Usage{ID: id, At: at, Provider: e.Provider, Model: &e.Model, Input: &in, Output: &out, Cached: &read, Tokens: &tokens, USD: usd, Basis: &basis})
-		return nil
-	}
 	settled, err := h.db.Query(`SELECT id,at,provider,model,input,output,cacheRead,usd,basis FROM native_settled WHERE client='claude' ORDER BY at`)
 	if err != nil {
 		return NativeView{}, err
@@ -624,66 +628,72 @@ func (h *History) NativeUsage() (NativeView, error) {
 		at := time.UnixMilli(settledAt).UTC().Format(time.RFC3339Nano)
 		claude.SettledAt = &at
 	}
-	v.Summary["claude"] = claude
-	rows, err := h.db.Query(`SELECT n.id,n.client,n.at,n.route,n.event,n.usd,n.basis,COALESCE(json_extract(n.event,'$.Evidence'),''),s.id IS NOT NULL
-	 FROM native_usage n LEFT JOIN native_settled s ON s.id=n.id WHERE n.client IN ('claude','antigravity') ORDER BY n.at`)
+	// Claude Code transcript rows are only counted, in any order.
+	rows, err := h.db.Query(`SELECT ` + nativeTallyColumns + ` FROM native_usage n LEFT JOIN native_settled s ON s.id=n.id WHERE n.client='claude'`)
 	if err != nil {
 		return NativeView{}, err
+	}
+	for rows.Next() {
+		var t nativeTally
+		if err = rows.Scan(&t.route, &t.evidence, &t.at, &t.priced, &t.settled); err != nil {
+			rows.Close()
+			return v, err
+		}
+		countClaude(&claude, t, policy, settledAt)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return v, err
+	}
+	claude.stampUnsettled()
+	v.Summary["claude"] = claude
+	v.settledRows = len(v.Rows)
+	if err = v.readCostClients(h.db); err != nil {
+		return v, err
+	}
+	h.native = &v
+	return v, nil
+}
+
+// readCostClients adds the rows of Antigravity, the client whose transcripts
+// still add to costs, in time order after the settled Claude Code rows.
+func (v *NativeView) readCostClients(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id,client,at,route,event,usd,basis,COALESCE(json_extract(event,'$.Evidence'),'')
+	 FROM native_usage WHERE client='antigravity' ORDER BY at,rowid`)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id, client, route, raw, basis, evidence string
 		var at int64
 		var usd *float64
-		var isSettled bool
-		if err = rows.Scan(&id, &client, &at, &route, &raw, &usd, &basis, &evidence, &isSettled); err != nil {
-			return v, err
-		}
-		transcriptCosts := client != "claude"
-		if !transcriptCosts && isSettled && nativeusage.Route(route) == nativeusage.Direct {
-			continue // counted from its settled copy; a later route still shows below
+		if err = rows.Scan(&id, &client, &at, &route, &raw, &usd, &basis, &evidence); err != nil {
+			return err
 		}
 		s := v.Summary[client].Complete()
-		if nativeusage.Route(route) == nativeusage.Unknown && policy.covers(client, evidence, at) {
-			route, evidence = string(nativeusage.Proxy), "configured-ocx-cutover"
-		}
 		switch nativeusage.Route(route) {
 		case nativeusage.Direct:
-			if transcriptCosts {
-				if err = row(id, at, raw, usd, basis); err != nil {
-					return v, err
-				}
-				s.Included++
-				break
+			var e nativeusage.Event
+			if err = json.Unmarshal([]byte(raw), &e); err != nil {
+				return err
 			}
-			if at < settledAt {
-				s.UnsettledDirectPast++
-			} else {
-				s.UnsettledDirectNew++
-			}
-			if s.unsettledFirst == 0 || at < s.unsettledFirst {
-				s.unsettledFirst = at
-			}
-			if at > s.unsettledLast {
-				s.unsettledLast = at
-			}
+			in, out, read, tokens := float64(e.Input), float64(e.Output), float64(e.CacheRead), float64(e.Input+e.Output)
+			v.Rows = append(v.Rows, Usage{ID: id, At: at, Provider: e.Provider, Model: &e.Model, Input: &in, Output: &out, Cached: &read, Tokens: &tokens, USD: usd, Basis: &basis})
+			s.Included++
 		case nativeusage.Proxy:
 			s.Proxy++
 			s.ProxyByEvidence[evidence]++
 		case nativeusage.Conflict:
 			s.Conflicts++
 			s.ConflictByReason[evidence]++
-			if transcriptCosts {
-				v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
-			}
+			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
 		default:
 			s.Pending++
 			s.PendingByReason[evidence]++
-			if transcriptCosts {
-				v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
-			}
+			v.Excluded = append(v.Excluded, NativeExcluded{Client: client, At: at})
 			// A reference amount only where transcripts are still valued.
-			if usd != nil && transcriptCosts {
+			if usd != nil {
 				total := *usd
 				if s.PendingUSD != nil {
 					total += *s.PendingUSD
@@ -691,21 +701,79 @@ func (h *History) NativeUsage() (NativeView, error) {
 				s.PendingUSD = &total
 			}
 		}
-		// A settled row's missing amount was counted from its settled copy.
-		if usd == nil && !(isSettled && !transcriptCosts) {
+		if usd == nil {
 			s.Unpriced++
 		}
 		v.Summary[client] = s
 	}
-	if err = rows.Err(); err != nil {
-		return v, err
+	return rows.Err()
+}
+
+// rereadCostClients returns the view with the Antigravity part read again and
+// the Claude Code part kept, or nil when the view must be read again.
+func (v NativeView) rereadCostClients(db *sql.DB) *NativeView {
+	v.Rows = v.Rows[:v.settledRows:v.settledRows]
+	v.Excluded = nil
+	v.Summary = map[string]NativeSummary{"claude": v.Summary["claude"]}
+	if err := v.readCostClients(db); err != nil {
+		return nil
 	}
-	if s, ok := v.Summary["claude"]; ok && s.unsettledLast > 0 {
+	return &v
+}
+
+// nativeTally is what NativeUsage reads of one stored Claude Code row.
+type nativeTally struct {
+	route, evidence string
+	at              int64
+	priced, settled bool
+}
+
+// nativeTallyColumns read a nativeTally from native_usage n LEFT JOIN native_settled s.
+const nativeTallyColumns = `n.route,COALESCE(json_extract(n.event,'$.Evidence'),''),n.at,n.usd IS NOT NULL,s.id IS NOT NULL`
+
+// countClaude counts one Claude Code transcript row in its summary. These rows
+// are only counted; they never reach costs.
+func countClaude(s *NativeSummary, t nativeTally, policy *ClaudeRoutePolicy, settledAt int64) {
+	route, evidence := nativeusage.Route(t.route), t.evidence
+	if t.settled && route == nativeusage.Direct {
+		return // counted from its settled copy; a later route still shows below
+	}
+	if route == nativeusage.Unknown && policy.covers("claude", evidence, t.at) {
+		route, evidence = nativeusage.Proxy, "configured-ocx-cutover"
+	}
+	switch route {
+	case nativeusage.Direct:
+		if t.at < settledAt {
+			s.UnsettledDirectPast++
+		} else {
+			s.UnsettledDirectNew++
+		}
+		if s.unsettledFirst == 0 || t.at < s.unsettledFirst {
+			s.unsettledFirst = t.at
+		}
+		if t.at > s.unsettledLast {
+			s.unsettledLast = t.at
+		}
+	case nativeusage.Proxy:
+		s.Proxy++
+		s.ProxyByEvidence[evidence]++
+	case nativeusage.Conflict:
+		s.Conflicts++
+		s.ConflictByReason[evidence]++
+	default:
+		s.Pending++
+		s.PendingByReason[evidence]++
+	}
+	// A settled row's missing amount was counted from its settled copy.
+	if !t.priced && !t.settled {
+		s.Unpriced++
+	}
+}
+
+func (s *NativeSummary) stampUnsettled() {
+	if s.unsettledLast > 0 {
 		first := time.UnixMilli(s.unsettledFirst).UTC().Format(time.RFC3339Nano)
 		last := time.UnixMilli(s.unsettledLast).UTC().Format(time.RFC3339Nano)
 		s.UnsettledDirectFirst, s.UnsettledDirectLast = &first, &last
-		v.Summary["claude"] = s
 	}
-	h.native = &v
-	return v, nil
 }

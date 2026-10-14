@@ -181,6 +181,12 @@ func (rt *Runtime) collectNative(ctx context.Context, now time.Time) (map[string
 	// authoritative usage is already ingested there; reading the local client
 	// transcripts would duplicate the same calls and create false exclusions.
 	out["codex"] = nativeStatus{Status: "via-ocx", ObservedAt: now.UTC().Format(time.RFC3339Nano), NativeSummary: store.NativeSummary{}.Complete()}
+	// The same holds for Claude Code when the operator says so. Its settled
+	// past costs stay in costs; only the transcripts are no longer read.
+	if rt.ClaudeViaOCX {
+		out["claude"] = nativeStatus{Status: "via-ocx", ObservedAt: now.UTC().Format(time.RFC3339Nano), NativeSummary: store.NativeSummary{}.Complete()}
+		sources = sources[1:]
+	}
 	for _, source := range sources {
 		s := nativeStatus{Status: "absent", ObservedAt: now.UTC().Format(time.RFC3339Nano), NativeSummary: store.NativeSummary{}.Complete()}
 		if source.Client == "claude" {

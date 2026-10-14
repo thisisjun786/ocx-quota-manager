@@ -68,6 +68,7 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_CLAUDE_HOME` | `~/.claude` | Claude account files and local usage transcripts, read only |
 | `QUOTA_GEMINI_HOME` | `$GEMINI_CLI_HOME` or `~/.gemini` | Antigravity CLI/extension conversation databases, read only |
 | `QUOTA_NATIVE_USAGE` | on | `off` disables local Claude Code and Antigravity usage collection and their cost overlay; Codex remains accounted for through OCX |
+| `QUOTA_CLAUDE_VIA_OCX` | unset | `1` states that Claude Code runs through OCX: its transcripts are not read and, like Codex, `analytics.nativeUsage.claude` reports `via-ocx`, so no direct-request warning is produced. Settled past Claude Code costs stay in costs |
 | `QUOTA_DIRECT_PROVIDERS` | unset | Providers whose quota is also read from the provider itself, for example `openai,anthropic,cursor` |
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |

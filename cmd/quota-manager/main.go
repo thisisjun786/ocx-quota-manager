@@ -51,6 +51,7 @@ func main() {
 	rt.CodexHome = env("QUOTA_CODEX_HOME", env("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex")))
 	rt.ClaudeHome = env("QUOTA_CLAUDE_HOME", filepath.Join(os.Getenv("HOME"), ".claude"))
 	rt.NativeEnabled = os.Getenv("QUOTA_NATIVE_USAGE") != "off"
+	rt.ClaudeViaOCX = os.Getenv("QUOTA_CLAUDE_VIA_OCX") == "1"
 	rt.GeminiHome = env("QUOTA_GEMINI_HOME", env("GEMINI_CLI_HOME", filepath.Join(os.Getenv("HOME"), ".gemini")))
 	rt.Direct = collect.ParseDirectProviders(os.Getenv("QUOTA_DIRECT_PROVIDERS"))
 	if os.Getenv("QUOTA_PRICE_CATALOG") != "off" {

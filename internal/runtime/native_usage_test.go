@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,5 +263,72 @@ func TestSettledClaudeCostsStayInTheirPeriod(t *testing.T) {
 	// The test clock trails the settlement, so the record counts as read late.
 	if s.Included != 1 || s.UnsettledDirectNew+s.UnsettledDirectPast != 1 || s.SettledAt == nil || len(rt.Snapshot().Warnings) != 1 {
 		t.Fatal(s.NativeSummary, rt.Snapshot().Warnings)
+	}
+}
+
+type nativeUnreadable struct{ *store.History }
+
+type ocxUsageStore interface {
+	store.Store
+	usageStore
+}
+
+// withoutNative is a history store that collects no native usage.
+type withoutNative struct{ ocxUsageStore }
+
+func (nativeUnreadable) NativeUsage() (store.NativeView, error) {
+	return store.NativeView{}, errors.New("native usage unreadable")
+}
+
+// Costs show the OCX breakdown when native costs are off or cannot be
+// attached, and the native-inclusive one otherwise.
+func TestCostsKeepTheOCXBreakdownWithoutNativeCosts(t *testing.T) {
+	rt, h, clk := nativeRuntime(t)
+	writeUsageLog(t, rt.Home, []map[string]any{ocxNativeRow(ocxRequestID, clk.Now().UnixMilli()-1000)})
+	rt.cycle(context.Background())
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("native costs", n)
+	}
+	rt.Store = nativeUnreadable{h}
+	rt.cycle(context.Background())
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("OCX costs after a native failure", n)
+	}
+	if w := strings.Join(rt.Snapshot().Warnings, "|"); !strings.Contains(w, "도구별 비용 집계가 지연되고 있습니다.") {
+		t.Fatal(w)
+	}
+	rt.Store = withoutNative{h}
+	rt.cycle(context.Background())
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("OCX costs from a store without native usage", n)
+	}
+	rt.Store, rt.NativeEnabled = h, false
+	rt.cycle(context.Background())
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("OCX costs with native usage off", n)
+	}
+}
+
+// With Claude Code routed through OCX its transcripts are not read: the status
+// says so like Codex, nothing is collected or warned about, and costs come from
+// OCX's usage log.
+func TestClaudeRoutedThroughOCXReadsNoTranscripts(t *testing.T) {
+	rt, h, clk := nativeRuntime(t)
+	rt.ClaudeViaOCX = true
+	at := clk.Now().UnixMilli() - 1000
+	addNativeTranscript(t, rt, "msg_direct", at)
+	writeUsageLog(t, rt.Home, []map[string]any{ocxNativeRow(ocxRequestID, at)})
+	rt.cycle(context.Background())
+	if s := claudeNativeStatus(t, rt); s.Status != "via-ocx" || s.Included+s.Pending+s.Proxy+s.UnsettledDirectNew+s.UnsettledDirectPast != 0 || s.RoutePolicy != nil {
+		t.Fatalf("%+v", s)
+	}
+	if w := rt.Snapshot().Warnings; len(w) != 0 {
+		t.Fatal(w)
+	}
+	if n := costRequests(t, rt); n != 1 {
+		t.Fatal("OCX row", n)
+	}
+	if v, _ := h.NativeUsage(); v.Summary["claude"].UnsettledDirectNew+v.Summary["claude"].UnsettledDirectPast != 0 {
+		t.Fatal("transcript collected", v.Summary["claude"])
 	}
 }

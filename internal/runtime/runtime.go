@@ -26,6 +26,9 @@ type Runtime struct {
 	ClaudeHome    string
 	GeminiHome    string
 	NativeEnabled bool
+	// ClaudeViaOCX states that Claude Code runs through OCX, so its
+	// transcripts are not read: OCX's usage log already holds those calls.
+	ClaudeViaOCX bool
 
 	mu                sync.Mutex
 	published         atomic.Value // contract.Snapshot
@@ -237,9 +240,10 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		}
 	}
 	var computed map[string]any
+	var ocxCosts func() map[string]any
 	var analysisErr error
 	if ingestErr == nil && !storeFailed {
-		computed, providers, analysisErr = attachAnalyticsWith(providers, hist, now, usageStatus, local.Bindings)
+		computed, providers, ocxCosts, analysisErr = analyzeUsage(providers, hist, now, usageStatus, local.Bindings)
 	}
 	iso := now.Format(time.RFC3339Nano)
 	status := "ok"
@@ -264,6 +268,11 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		if err := rt.attachNativeCosts(analytics, providers, now); err != nil {
 			nativeWarnings = append(nativeWarnings, "도구별 비용 집계가 지연되고 있습니다.")
 		}
+	}
+	// The OCX-only breakdown is what costs show when no native costs were
+	// attached; otherwise it would be computed only to be replaced.
+	if _, attached := analytics["costs"]; status != "error" && !attached {
+		analytics["costs"] = ocxCosts()
 	}
 	src := "opencodex-local-snapshot"
 	rt.publish(contract.Snapshot{

@@ -187,7 +187,9 @@ Only included ledger rows join the existing cost analysis. Costs use the current
 with OCX rows bounded by their last successful read; native rows continue advancing during an OCX
 outage. Quota calibration, account attribution, coverage and usage periods still use OCX rows alone.
 Native account attribution stays unknown. Missing tariffs retain tokens and unknown dollars.
-`analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters.
+`analytics.nativeUsage.codex.status` is `via-ocx`, with no duplicate usage counters. With
+`QUOTA_CLAUDE_VIA_OCX=1` the same holds for `analytics.nativeUsage.claude`: Claude Code transcripts
+are not read, no direct-evidence warning is produced, and the settled rows stay in costs.
 `analytics.nativeUsage.{claude,antigravity}` reports source status, pending files, invalid/failed
 records and `includedRequests`/`pendingRequests`/`proxyRequests`/`conflictRequests`, with
 `pendingApiUsd` summing the reference amounts of pending Antigravity rows only (null for Claude Code,

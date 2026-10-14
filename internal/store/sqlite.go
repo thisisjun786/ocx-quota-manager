@@ -149,8 +149,11 @@ func (h *History) SetMeta(key string, value any) error {
 		return err
 	}
 	_, err = h.db.Exec("INSERT OR REPLACE INTO meta VALUES (?,?)", key, string(raw))
-	if key == "claudeCacheAssumption" || key == "cursorCacheReference" {
+	if key == "claudeCacheAssumption" {
 		h.invalidateUsage()
+	}
+	if key == "cursorCacheReference" {
+		h.markCursorCacheDirty()
 	}
 	if key == ClaudeRoutePolicyKey {
 		h.cacheMu.Lock()
