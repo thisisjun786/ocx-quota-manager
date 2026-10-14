@@ -34,6 +34,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	interval, err := collectInterval(os.Getenv("QUOTA_COLLECT_INTERVAL"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	hist, err := store.Open(data, storage)
 	if err != nil {
 		log.Fatal(err)
@@ -47,6 +51,7 @@ func main() {
 		log.Fatal(err)
 	}
 	rt := runtime.New(clock.System{}, hist, collect.NewHTTPSTransport())
+	rt.Interval = interval
 	rt.Home = home
 	rt.CodexHome = env("QUOTA_CODEX_HOME", env("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex")))
 	rt.ClaudeHome = env("QUOTA_CLAUDE_HOME", filepath.Join(os.Getenv("HOME"), ".claude"))
@@ -105,6 +110,19 @@ func historyOptions(raw string) (store.OpenOptions, error) {
 		return store.OpenOptions{}, fmt.Errorf("QUOTA_DB_MAX_MIB must be a positive integer no greater than %d", maxMiB)
 	}
 	return store.OpenOptions{MaxBytes: mib * (1 << 20)}, nil
+}
+
+// collectInterval reads QUOTA_COLLECT_INTERVAL: whole seconds from 10s, the
+// former fixed cadence, to 5m, the direct readers' own minimum cadence.
+func collectInterval(raw string) (time.Duration, error) {
+	if raw == "" {
+		return runtime.DefaultInterval, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second || d > 5*time.Minute || d%time.Second != 0 {
+		return 0, fmt.Errorf("QUOTA_COLLECT_INTERVAL must be whole seconds from 10s to 5m, for example 30s")
+	}
+	return d, nil
 }
 
 func env(k, fallback string) string {

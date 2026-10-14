@@ -15,6 +15,12 @@ import (
 
 const failureNote = "수집 작업이 중단되어 마지막 기록을 표시합니다."
 
+// DefaultInterval is how often a cycle reads local snapshots, ingests usage
+// and recomputes analytics over the whole history. It matches the Mac app's
+// refresh; direct provider reads keep their own five-minute minimum, and
+// readings turn stale only after 15 minutes.
+const DefaultInterval = 30 * time.Second
+
 type Runtime struct {
 	Clock         clock.Clock
 	Store         store.Store
@@ -48,7 +54,7 @@ func New(clk clock.Clock, st store.Store, tr transport.Transport) *Runtime {
 	if tr == nil {
 		tr = collect.NewHTTPSTransport()
 	}
-	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: 10 * time.Second, sched: collect.NewScheduler(clk, tr)}
+	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: DefaultInterval, sched: collect.NewScheduler(clk, tr)}
 	if logs, ok := st.(interface{ InsertCollectionLog(collect.Attempt) error }); ok {
 		rt.sched.OnAttempt = logs.InsertCollectionLog
 	}
@@ -63,7 +69,7 @@ func (rt *Runtime) bootSnapshot() contract.Snapshot {
 	return contract.Snapshot{
 		SchemaVersion:          contract.SchemaVersion,
 		ObservedAt:             &now,
-		RefreshIntervalSeconds: intPtr(10),
+		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
 		Warnings:               []string{"저장된 쿼타 기록을 불러오고 있습니다."},
 		Providers:              []contract.Provider{},
 		Analytics: map[string]any{
