@@ -10,6 +10,22 @@ and a refused credential (401/403) waits 30 minutes before it is sent again.
 
 When deploying a new release, preserve the previous release and the history database, deploy the tested source snapshot, then verify the UI and collection status.
 
+History retention runs daily even when usage ingestion fails, after the failed transaction has
+rolled back. This lets expired rows free space for the next collection cycle. The default history
+retention stays at 90 days; collection attempt details stay at 30 days. It cannot reclaim records
+that are still inside those windows. The dashboard warns when occupied SQLite pages reach 80%
+of the configured `QUOTA_DB_MAX_MIB` ceiling; reusable free pages are excluded. This warning is
+an early notice, not a claim that automatic retention will always create enough room.
+
+For durable storage, set `QUOTA_DATA_DIR` to a directory on a persistent mounted volume. Pause
+the monitor and backup timer, wait for a running backup to finish, then use SQLite's backup API
+to make a consistent copy. Create private directories (0700) and data files (0600) before copying.
+Verify the copied schema and records before activation, retain the previous data, and update the
+backup service's `--source` along with `QUOTA_DATA_DIR`. Restore the timer's previous state even
+if the move fails. A rollback binary must support the configured capacity and current schema;
+never overwrite newly collected data with an older snapshot automatically.
+
+
 An example user systemd unit lives in `deploy/quota-monitor.service`; it uses `%h` for the home directory and a `releases/current` path you point at the release you installed. Restart with `systemctl --user restart quota-monitor.service`. For rollback, restore the previous unit from the deployment backup to `~/.config/systemd/user/quota-monitor.service`, run `systemctl --user daemon-reload`, then restart the service. Keep the history database in place. To stop the monitor entirely, use `systemctl --user stop quota-monitor.service`; this does not affect OpenCodex. The app stores private quota and normalized usage history in `QUOTA_DATA_DIR`; source account files remain read-only.
 
 Backing up that history, restoring it, and checking which release is actually running are described
@@ -176,7 +192,7 @@ variable, and with it unset the list is empty and nothing is fetched or publishe
 sees `directQuota: null` can trace the reason rather than guessing, and turning direct collection on
 is a unit change followed by a restart — not something that happens on its own when the code lands.
 
-**Other network paths exist regardless.** With adapters off, the Ollama usage probe and the
+**Other network paths exist regardless.** With adapters off, the Ollama balance probe and the
 OpenCodex management refresh still reach out when they are configured. "Direct collection is off"
 does not mean "this service makes no outbound requests".
 

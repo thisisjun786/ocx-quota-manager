@@ -32,8 +32,10 @@ func TestProbeRosterWithoutDirectMakesNoNetwork(t *testing.T) {
 	rt.Direct = nil
 	srv := startProbeHTTP(t, rt)
 	rt.cycle(context.Background())
-	if len(fake.Calls) != 0 {
-		t.Fatalf("direct disabled must not call transport, calls=%d", len(fake.Calls))
+	// A configured Ollama Cloud balance key is the one direct read that stays
+	// on with every other direct adapter off: only /api/balance is polled.
+	if len(fake.Calls) != 1 || fake.Calls[0].Host != "ollama.com" || fake.Calls[0].Path != "/api/balance" {
+		t.Fatalf("other direct reads must not run, calls=%+v", fake.Calls)
 	}
 	snap := getProbeSnapshot(t, srv)
 	if snap.SchemaVersion != 1 || len(snap.Providers) != 3 {
@@ -54,6 +56,13 @@ func TestProbeRosterWithoutDirectMakesNoNetwork(t *testing.T) {
 	claude := findAccount(t, snap, "anthropic", "a1")
 	if claude.Windows[0].RemainingPercent == nil || *claude.Windows[0].RemainingPercent != 0 {
 		t.Fatalf("claude %+v", claude)
+	}
+	ollamaAcc := findAccount(t, snap, "ollama-cloud", "key:k1")
+	if openai.Refresh != nil || claude.Refresh != nil {
+		t.Fatalf("other providers were polled directly: %v %v", openai.Refresh, claude.Refresh)
+	}
+	if ollamaAcc.Refresh == nil {
+		t.Fatal("configured ollama balance poll must attach direct status")
 	}
 	if n := countObservations(t, hist.DB()); n != 0 {
 		t.Fatalf("cache-only cycle stored %d observations", n)

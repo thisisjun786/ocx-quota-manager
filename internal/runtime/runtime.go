@@ -15,15 +15,26 @@ import (
 
 const failureNote = "수집 작업이 중단되어 마지막 기록을 표시합니다."
 
+// DefaultInterval is how often a cycle reads local snapshots, ingests usage
+// and recomputes analytics over the whole history. It matches the Mac app's
+// refresh; direct provider reads keep their own five-minute minimum, and
+// readings turn stale only after 15 minutes.
+const DefaultInterval = 30 * time.Second
+
 type Runtime struct {
-	Clock      clock.Clock
-	Store      store.Store
-	Transport  transport.Transport
-	Interval   time.Duration
-	Direct     []string
-	Home       string
-	CodexHome  string
-	ClaudeHome string
+	Clock         clock.Clock
+	Store         store.Store
+	Transport     transport.Transport
+	Interval      time.Duration
+	Direct        []string
+	Home          string
+	CodexHome     string
+	ClaudeHome    string
+	GeminiHome    string
+	NativeEnabled bool
+	// ClaudeViaOCX states that Claude Code runs through OCX, so its
+	// transcripts are not read: OCX's usage log already holds those calls.
+	ClaudeViaOCX bool
 
 	mu                sync.Mutex
 	published         atomic.Value // contract.Snapshot
@@ -43,7 +54,7 @@ func New(clk clock.Clock, st store.Store, tr transport.Transport) *Runtime {
 	if tr == nil {
 		tr = collect.NewHTTPSTransport()
 	}
-	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: 10 * time.Second, sched: collect.NewScheduler(clk, tr)}
+	rt := &Runtime{Clock: clk, Store: st, Transport: tr, Interval: DefaultInterval, sched: collect.NewScheduler(clk, tr)}
 	if logs, ok := st.(interface{ InsertCollectionLog(collect.Attempt) error }); ok {
 		rt.sched.OnAttempt = logs.InsertCollectionLog
 	}
@@ -58,7 +69,7 @@ func (rt *Runtime) bootSnapshot() contract.Snapshot {
 	return contract.Snapshot{
 		SchemaVersion:          contract.SchemaVersion,
 		ObservedAt:             &now,
-		RefreshIntervalSeconds: intPtr(10),
+		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
 		Warnings:               []string{"저장된 쿼타 기록을 불러오고 있습니다."},
 		Providers:              []contract.Provider{},
 		Analytics: map[string]any{
@@ -138,6 +149,19 @@ func (rt *Runtime) Start(ctx context.Context) {
 	}()
 }
 
+// ollamaCollectAllowed reports whether a currently usable Ollama Cloud
+// credential needs the balance poll even when the other direct readers are
+// all off. The scheduler still re-checks the full credential contract; this
+// gate only prevents a no-binding cycle from being marked direct.
+func ollamaCollectAllowed(bindings []collect.Binding) bool {
+	for _, b := range bindings {
+		if b.Provider == "ollama-cloud" && b.Enabled && b.Token != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (rt *Runtime) cycle(ctx context.Context) {
 	if !rt.poll.TryLock() {
 		return
@@ -146,21 +170,25 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	now := rt.Clock.Now().UTC()
 	local, err := (collect.Reader{Home: rt.Home, CodexHome: rt.CodexHome, ClaudeHome: rt.ClaudeHome}).LoadLocal(now)
 	if err != nil {
-		rt.markFailure()
+		rt.markFailureWithNative(ctx, now)
 		return
 	}
 	// An unreadable credential source is not an authoritative empty roster.
 	// Keep the last public snapshot without reusing credentials for new calls.
-	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials"} {
+	for _, key := range []string{"ocxConfig", "ocxAuth", "ocxCodexAccounts", "codexAuth", "claudeCredentials", "claudeProfile"} {
 		switch local.Files[key] {
 		case collect.FileMalformed, collect.FileUnreadable, collect.FileOversized:
-			rt.markFailure()
+			rt.markFailureWithNative(ctx, now)
 			return
 		}
 	}
+	direct := append([]string{}, rt.Direct...)
+	if ollamaCollectAllowed(local.Bindings) {
+		direct = append(direct, "ollama-cloud")
+	}
 	var rows []collect.Reading
-	if len(rt.Direct) > 0 {
-		rows = rt.sched.Collect(ctx, local.Bindings, append(append([]string{}, rt.Direct...), "ollama-cloud"))
+	if len(direct) > 0 {
+		rows = rt.sched.Collect(ctx, local.Bindings, direct)
 	}
 	logErrors := rt.sched.LogErrors()
 	epochs, epochErr := rt.bindingEpochs(local.Bindings, now.UnixMilli())
@@ -186,7 +214,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 			storeFailed = true
 		}
 	}
-	if len(rt.Direct) > 0 {
+	if len(direct) > 0 {
 		outcomes := rt.sched.Outcomes()
 		attachDirectStatus(providers, outcomes, now)
 		if err := rt.persistDirectOutcomes(outcomes); err != nil {
@@ -204,10 +232,9 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		}
 	}
 	usageStatus, ingestErr := rt.ingestUsage(now)
-	if ingestErr == nil {
-		if err := MaintainIfDue(rt.Store, now); err != nil {
-			storeFailed = true
-		}
+	nativeStatus, nativeWarnings := rt.collectNative(ctx, now)
+	if err := MaintainIfDue(rt.Store, now); err != nil {
+		storeFailed = true
 	}
 	var hist usageStore
 	if us, ok := rt.Store.(usageStore); ok {
@@ -219,9 +246,10 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		}
 	}
 	var computed map[string]any
+	var ocxCosts func() map[string]any
 	var analysisErr error
 	if ingestErr == nil && !storeFailed {
-		computed, providers, analysisErr = attachAnalyticsWith(providers, hist, now, usageStatus, local.Bindings)
+		computed, providers, ocxCosts, analysisErr = analyzeUsage(providers, hist, now, usageStatus, local.Bindings)
 	}
 	iso := now.Format(time.RFC3339Nano)
 	status := "ok"
@@ -241,13 +269,24 @@ func (rt *Runtime) cycle(ctx context.Context) {
 		previous, _ := rt.published.Load().(contract.Snapshot)
 		analytics, providers = retainAnalysis(previous, providers)
 	}
+	if rt.NativeEnabled {
+		analytics["nativeUsage"] = nativeStatus
+		if err := rt.attachNativeCosts(analytics, providers, now); err != nil {
+			nativeWarnings = append(nativeWarnings, "도구별 비용 집계가 지연되고 있습니다.")
+		}
+	}
+	// The OCX-only breakdown is what costs show when no native costs were
+	// attached; otherwise it would be computed only to be replaced.
+	if _, attached := analytics["costs"]; status != "error" && !attached {
+		analytics["costs"] = ocxCosts()
+	}
 	src := "opencodex-local-snapshot"
 	rt.publish(contract.Snapshot{
 		SchemaVersion:          contract.SchemaVersion,
 		ObservedAt:             &iso,
 		Source:                 &src,
 		RefreshIntervalSeconds: intPtr(int(rt.Interval / time.Second)),
-		Warnings:               local.Warnings,
+		Warnings:               append(append(local.Warnings, nativeWarnings...), storageWarnings(rt.Store)...),
 		Providers:              providers,
 		Analytics:              analytics,
 	})

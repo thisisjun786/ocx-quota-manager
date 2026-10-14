@@ -62,12 +62,48 @@ back, restarts it and exits non-zero. Old releases stay under `releases/` for a 
 | `QUOTA_HOST`, `QUOTA_PORT` | `127.0.0.1`, `8787` | Where the server listens |
 | `QUOTA_PUBLIC_ORIGIN` | unset | Origin allowed when served through a proxy |
 | `QUOTA_DATA_DIR` | `~/.local/state/quota-monitor` | SQLite history (quota readings and normalized usage) |
+| `QUOTA_COLLECT_INTERVAL` | `30s` | How often the server reads local snapshots, ingests usage and publishes a new snapshot; whole seconds from `10s` to `5m`. Direct provider reads keep their own five-minute minimum |
+| `QUOTA_DB_MAX_MIB` | `512` | SQLite database size limit in MiB. Raising it permits growth without deleting records; lowering it below the current size refuses startup. |
 | `OPENCODEX_HOME` | `~/.opencodex` | OpenCodex config and usage log, read only |
 | `QUOTA_CODEX_HOME` | `$CODEX_HOME` or `~/.codex` | Codex account files, read only |
+| `QUOTA_CLAUDE_HOME` | `~/.claude` | Claude account files and local usage transcripts, read only |
+| `QUOTA_GEMINI_HOME` | `$GEMINI_CLI_HOME` or `~/.gemini` | Antigravity CLI/extension conversation databases, read only |
+| `QUOTA_NATIVE_USAGE` | on | `off` disables local Claude Code and Antigravity usage collection and their cost overlay; Codex remains accounted for through OCX |
+| `QUOTA_CLAUDE_VIA_OCX` | unset | `1` states that Claude Code runs through OCX: its transcripts are not read and, like Codex, `analytics.nativeUsage.claude` reports `via-ocx`, so no direct-request warning is produced. Settled past Claude Code costs stay in costs |
 | `QUOTA_DIRECT_PROVIDERS` | unset | Providers whose quota is also read from the provider itself, for example `openai,anthropic,cursor` |
 | `QUOTA_PRICE_CATALOG` | on | `off` disables the daily models.dev price fallback |
 | `QUOTA_TZ` | system zone | Where day bars and daily totals start, for example `Asia/Seoul` |
 | `QUOTA_CLAUDE_CACHE_TTL`, `QUOTA_CLAUDE_CACHE_FROM` | 5-minute rate | Price Claude cache writes at the 1-hour rate from a given time |
+| `QUOTA_CLAUDE_OCX_FROM`, `QUOTA_CLAUDE_OCX_UNTIL` | unset | From this RFC3339 instant (until the optional exclusive end), Claude Code records without a request ID are reported as OCX calls in the usage counts; costs are unaffected. `off` clears the stored setting, unset keeps it |
+
+## Local tool usage
+
+Codex calls in this deployment all run through OCX, so OCX is their single source of usage and cost.
+The collector does not scan Codex transcripts or add their totals again. Previously collected local
+Codex candidates remain stored under normal retention, but are not used for costs or warnings.
+
+Cost analysis also collects local Claude Code and Antigravity usage metadata. Collection is
+incremental and bounded. Routine historical imports and unfinished log tails do not produce warning
+banners. Tokscale's hourly totals are not added because they can contain the same calls.
+
+Claude Code costs come from OCX's usage log. Claude Code transcripts are still collected for usage
+and session data, but they are no longer valued or added to costs. The transcript rows that costs
+already counted (records carrying an upstream Anthropic request ID) were settled once, with their
+stored amounts, when this release first opened the history, so past periods keep their totals; they
+expire with normal retention. A Claude Code record that carries an Anthropic request ID and was not
+settled is reported in a warning, counted once by its stable ID, split into calls dated after the
+settlement and older records read late; it is not added to costs and no amount is estimated.
+Records without a request ID or with an OCX marker produce no warning. Antigravity generation
+records still enter the combined cost. `analytics.nativeUsage.codex.status` is `via-ocx`; the other
+source statuses describe local collection. Warnings report read/format failures, Antigravity records
+left out of costs because their route is unproven or contradictory, and new Claude Code direct
+evidence; normal background work produces none.
+
+Native source identities are hashed, repeated/streamed records are reconciled, and conflicting
+evidence stays excluded even after replay. Source transcripts and databases are never changed. Native
+costs remain separate from quota calibration and account estimates; an account is not guessed from
+the currently selected login. Disabling native collection hides its cost overlay but retains history.
+See [the data contract](docs/architecture.md#native-usage-and-costs) for the attribution limits.
 
 ## Security
 

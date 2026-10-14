@@ -95,6 +95,7 @@ func loadAnalysisInput(providers []contract.Provider, hist usageStore, now time.
 			return nil, fmt.Errorf("read price evidence: %w", err)
 		}
 	}
+	in.usage = applyOllamaCacheAssumption(in.usage)
 	in.priced, in.unknown = priceUsage(in.usage, in.evidence, in.nowMS)
 	in.usageNow = in.nowMS
 	if hist != nil {
@@ -222,6 +223,28 @@ func (in *analysisInput) attachWindowAnalytics(providerID string, a *contract.Ac
 // quote for any configured model that has no stored evidence yet.
 func (in *analysisInput) providerModelPrices(p *contract.Provider) []map[string]any {
 	prices := evidenceFor(p.ID, in.evidence)
+	if p.ID == "ollama-cloud" {
+		// The fixed-cache scenario uses today's source-owned reference tariff.
+		// Stored historical evidence remains available in the evidence view.
+		prices = nil
+		models := append([]string(nil), p.SupportedModels...)
+		for _, u := range in.usage {
+			if u.Provider == p.ID && u.Model != nil {
+				models = append(models, *u.Model)
+			}
+		}
+		seen := map[string]bool{}
+		for _, model := range models {
+			if seen[model] {
+				continue
+			}
+			seen[model] = true
+			if price, ok := store.ModelPriceEvidence(p.ID, model, in.nowMS); ok {
+				prices = append(prices, evidenceItem(price))
+			}
+		}
+		return prices
+	}
 	for _, model := range p.SupportedModels {
 		found := false
 		for _, price := range prices {
@@ -300,9 +323,21 @@ func configuredModels(providers []contract.Provider) []string {
 // account estimate), run the tracked features that keep durable state, and
 // assemble the top-level summary. Bindings name each Ollama account's readings.
 func attachAnalyticsWith(providers []contract.Provider, hist usageStore, now time.Time, usageStatus string, bindings []collect.Binding) (map[string]any, []contract.Provider, error) {
-	in, err := loadAnalysisInput(providers, hist, now, usageStatus)
+	analytics, providers, costs, err := analyzeUsage(providers, hist, now, usageStatus, bindings)
 	if err != nil {
 		return nil, providers, err
+	}
+	analytics["costs"] = costs()
+	return analytics, providers, nil
+}
+
+// analyzeUsage is attachAnalyticsWith with the OCX cost breakdown left to the
+// caller. A cycle that collects native usage replaces it with one that also
+// holds the native rows, so it needs the OCX one only when that fails.
+func analyzeUsage(providers []contract.Provider, hist usageStore, now time.Time, usageStatus string, bindings []collect.Binding) (map[string]any, []contract.Provider, func() map[string]any, error) {
+	in, err := loadAnalysisInput(providers, hist, now, usageStatus)
+	if err != nil {
+		return nil, providers, nil, err
 	}
 	top := newTopPeriods()
 	models := configuredModels(providers)
@@ -312,9 +347,8 @@ func attachAnalyticsWith(providers []contract.Provider, hist usageStore, now tim
 	}
 	analytics := in.summaryDTO(providers, providerRecs, top, models, usageStatus)
 	if err := in.attachTrackedFeatures(providers, analytics, bindings); err != nil {
-		return nil, providers, err
+		return nil, providers, nil, err
 	}
-	analytics["costs"] = costBreakdown(in.usage, in.priced, providers, in.usageNow, displayLocation)
 	analytics["accounts"] = accountRoster(providers, in.usage, in.priced, in.usageNow)
 	analytics["subscriptionMonthlyUsd"] = subscriptionTotal(providers)
 	analytics["usageStale"] = in.usageStale
@@ -323,7 +357,10 @@ func attachAnalyticsWith(providers []contract.Provider, hist usageStore, now tim
 			analytics["coverage"].(map[string]any)[key] = nil
 		}
 	}
-	return analytics, providers, nil
+	costs := func() map[string]any {
+		return costBreakdown(in.usage, in.priced, providers, in.usageNow, displayLocation)
+	}
+	return analytics, providers, costs, nil
 }
 
 func (in *analysisInput) summaryDTO(providers []contract.Provider, providerRecs map[string]map[string]any, top topPeriodsTracker, models []string, usageStatus string) map[string]any {

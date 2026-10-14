@@ -253,10 +253,15 @@ func (h *History) catalogForIngest() (*Catalog, string) {
 	}
 	defer rows.Close()
 	var pairs [][2]string
+	seen := map[[2]string]bool{}
 	for rows.Next() {
 		var p [2]string
 		if rows.Scan(&p[0], &p[1]) == nil {
-			pairs = append(pairs, p)
+			p[0] = PriceProvider(p[0])
+			if !seen[p] {
+				seen[p] = true
+				pairs = append(pairs, p)
+			}
 		}
 	}
 	rev = c.Revision(pairs)

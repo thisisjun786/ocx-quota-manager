@@ -91,6 +91,13 @@ func updateCacheReference(hist usageStore, now time.Time) error {
 
 func attachCacheAssumption(providers []contract.Provider, hist usageStore, now time.Time, failed bool) {
 	for i := range providers {
+		if providers[i].ID == "ollama-cloud" {
+			providers[i].Analytics.(map[string]any)["cacheAssumption"] = map[string]any{
+				"basis": "user-fixed", "appliedRate": ollamaCacheRate,
+				"observedRate": nil, "stale": false,
+			}
+			continue
+		}
 		if providers[i].ID != "cursor" {
 			continue
 		}

@@ -39,6 +39,7 @@ func (h *History) invalidateAll() {
 	h.cacheMu.Lock()
 	h.usage.valid = false
 	h.obs.valid = false
+	h.native = nil
 	h.cacheMu.Unlock()
 }
 
@@ -67,6 +68,32 @@ func (h *History) markUsageDirty(ids []string) {
 	for _, id := range ids {
 		h.usage.dirty[id] = true
 	}
+}
+
+// markCursorCacheDirty follows a new cursorCacheReference. It values only the
+// usage rows that have a cursor cache cost (see usage_valued), and is written
+// every few minutes, so only those rows are fetched again.
+func (h *History) markCursorCacheDirty() {
+	rows, err := h.db.Query(`SELECT id FROM cursor_cache_costs`)
+	if err != nil {
+		h.invalidateUsage()
+		return
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			h.invalidateUsage()
+			return
+		}
+		ids = append(ids, id)
+	}
+	if rows.Err() != nil {
+		h.invalidateUsage()
+		return
+	}
+	h.markUsageDirty(ids)
 }
 
 const usageColumns = `id,at,provider,account,model,input,output,cached,tokens,usd,basis,cacheEstimated,estimatedCachedTokens,noCacheUsd,rid`

@@ -293,7 +293,7 @@ export function accountView(provider: QuotaProvider, a: QuotaAccount, selectedPe
   if (linkedUsage && usage && usage.requests > 0) {
     const tokens = node('div','metrics');
     tokens.append(metric('입력 토큰',count.format(usage.inputTokens)),metric('출력 토큰',count.format(usage.outputTokens)),metric('캐시 읽기',count.format(usage.cachedTokens),'입력 토큰에 포함'));
-    if (usage.cacheEstimatedRequests) tokens.append(metric('추정 캐시 읽기',count.format(usage.estimatedCachedTokens),'미보고 입력에 평균 비율 적용'));
+    if (usage.cacheEstimatedRequests) tokens.append(metric('추정 캐시 읽기',count.format(usage.estimatedCachedTokens),provider.id === 'ollama-cloud' ? '전체 입력의 90% 가정' : '미보고 입력에 평균 비율 적용'));
     details.append(tokens);
     details.append(node('p','sub-note',`${selectedLabel} ${count.format(usage.requests)}회 호출 · 가격 확인 ${percent.format(coverage(usage)*100)}%` + spanNote));
     // 행에서 뺀 근거가 여기 모인다. '회 호출' 은 쓰지 않는다 — 위의 호출 줄을 찾는 검사가 있다.
@@ -364,7 +364,9 @@ export function providerAnalytics(p: QuotaProvider, ctx: UiContext & {changePeri
     const stats = periods?.[ctx.selectedPeriod];
     const applied = num(cache.appliedRate);
     const note = finite(applied)
-      ? `캐시 ${percent.format(applied * 100)}% 가정 · Ollama와 같은 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
+      ? cache.basis === 'user-fixed'
+        ? `캐시 ${percent.format(applied * 100)}% 고정 가정 · 모든 모델의 전체 입력에 적용한 추정 비용입니다. 실제 캐시 사용률은 아닙니다.`
+        : `캐시 ${percent.format(applied * 100)}% 가정 · 다른 제공자의 최근 30일 실측 평균 · 입력·출력 토큰도 추정값` + (cache.stale ? ' · 이전 평균 사용' : '')
       : '캐시 평균을 계산할 실측 자료가 없어 캐시 할인을 적용하지 않았습니다.';
     wrap.append(node('p','sub-note',note));
     if (stats?.cacheEstimatedRequests) wrap.append(node('p','sub-note',`${periodLabel(ctx.selectedPeriod)} 캐시 미적용 ${usd(stats.noCacheApiUsd)} → 추정 캐시 적용 ${usd(stats.apiUsd)}`));
@@ -673,7 +675,7 @@ type AccountWindowRow = {id: string; label: string; remainingPercent: number | n
 type AccountRow = {provider: string; providerName: string; id: string; label: string; plan: string | null; status: string; health: Health; reason: string;
   lowest: AccountWindowRow | null; nextResetAt: string | null; windows: AccountWindowRow[]; day: CostCell; week: CostCell; lastRequestAt: string | null};
 type CostRow = CostCell & {key: string; provider: string; name: string; configured: boolean | null; share: number};
-type CostPeriod = {hours: number; total: CostCell; providers: CostRow[]; models: CostRow[]; accounts: CostRow[]};
+type CostPeriod = {hours: number; total: CostCell; providers: CostRow[]; models: CostRow[]; accounts: CostRow[]; nativeExcluded: Record<string, number>};
 
 const HEALTH_LABEL: Record<Health, string> = {critical:'위험', warning:'주의', ok:'정상', unknown:'확인 불가', idle:'일시 중지'};
 
@@ -716,7 +718,21 @@ function costRows(value: unknown): CostRow[] {
 function costPeriod(value: unknown): CostPeriod | null {
   const o = asRecord(value);
   if (!o) return null;
-  return {hours:n0(o.hours), total:costCell(o.total), providers:costRows(o.providers), models:costRows(o.models), accounts:costRows(o.accounts)};
+  const excluded: Record<string, number> = {};
+  for (const [client, n] of Object.entries(asRecord(o.nativeExcluded) ?? {})) if (typeof n === 'number' && n > 0) excluded[client] = n;
+  return {hours:n0(o.hours), total:costCell(o.total), providers:costRows(o.providers), models:costRows(o.models), accounts:costRows(o.accounts), nativeExcluded:excluded};
+}
+
+/**
+ * What a cost period leaves out of local tool records, in the period the screen shows. Only a
+ * client whose transcripts still add to costs (Antigravity) has any; Claude Code costs come from
+ * OCX's usage log, so its transcripts are never listed.
+ */
+export function nativeExcludedNotes(excluded: Record<string, number>): string[] {
+  const notes: string[] = [];
+  const antigravity = excluded.antigravity ?? 0;
+  if (antigravity > 0) notes.push(`이 기간 Antigravity 기록 ${count.format(antigravity)}건은 호출 경로를 확인할 수 없거나 기록 정보가 서로 엇갈려 합계에 더하지 않았습니다.`);
+  return notes;
 }
 
 export function severityOf(remaining: number | null): Health {
@@ -904,16 +920,20 @@ export function costsView(ctx: UiContext): HTMLElement {
     .sort((a, b) => series.buckets.reduce((s, d) => s + (d.byProvider[b] ?? 0), 0) - series.buckets.reduce((s, d) => s + (d.byProvider[a] ?? 0), 0));
   const colour = providerColours(providerOrder);
   const names = new Map((ctx.snapshot?.providers ?? []).map(p => [p.id, p.name]));
+  // A provider the roster does not name (anthropic-native) keeps the server's label in the chart and every table.
+  for (const r of period?.providers ?? []) if (!names.has(r.provider)) names.set(r.provider, r.name);
   if (series.buckets.length) section.append(bucketChart(series, providerOrder, colour, names, label));
   if (period) {
     const grid = node('div', 'cost-grid');
     grid.append(rankTable('제공자별', period.providers, r => names.get(r.provider) ?? r.name, colour, true),
       rankTable('모델별', period.models.slice(0, 12), r => r.name, colour, false),
       rankTable('계정별', period.accounts.slice(0, 12), r => `${names.get(r.provider) ?? r.provider} · ${r.name}`, colour, false));
-    if (unattributed) grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: OpenCodex가 계정 표시 없이 기록한 호출입니다(직접 로그인·기본 계정 경로). 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
+    if (unattributed) grid.append(node('p', 'sub-note unattributed-note', `계정 미확인 ${count.format(unattributed.requests)}회: 사용 기록에서 계정을 확인할 수 없는 호출입니다. 제공자 합계에는 포함되지만 계정별로 나눌 근거가 없어 추정하지 않습니다.`));
     section.append(grid);
   }
   section.append(node('p', 'sub-note', 'API 환산액은 실제 청구액이 아니며, 기록된 토큰에 모델별 API 단가를 곱한 참고값입니다. 제공자 가격표나 공개 카탈로그(models.dev)에 없는 모델은 단가 미확인, 토큰 수를 보고하지 않은 호출은 토큰 미보고로 합계에서 빠집니다.'));
+  for (const note of nativeExcludedNotes(period?.nativeExcluded ?? {})) section.append(node('p', 'sub-note', note));
+  if (period?.providers.some(p => p.provider === 'ollama-cloud')) section.append(node('p', 'sub-note', 'Ollama Cloud는 전체 입력의 캐시 90%를 가정한 추정 비용입니다. 캐시 토큰 표시는 실제 기록을 유지합니다.'));
   return section;
 }
 

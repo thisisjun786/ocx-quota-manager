@@ -14,10 +14,11 @@ import (
 	"github.com/thisisjun786/ocx-quota-manager/internal/store"
 )
 
-// Ollama Cloud reports a share of each window plus a per-model request
-// counter, but no tokens. Matching isolated single-model runs against the
-// usage log gives tokens and API-equivalent dollars per percentage point.
-// Ported from src/ollama.mjs calibrateOllama.
+// Ollama Cloud reports a remaining share per window on /api/balance. The
+// legacy /api/usage surface also carried per-model request counters, but no
+// tokens. Matching isolated single-model runs against the usage log gives
+// tokens and API-equivalent dollars per percentage point. Ported from
+// src/ollama.mjs calibrateOllama; balance-based readings calibrate nothing.
 
 const (
 	// Direct reads poll each account every five minutes, so one missed poll
@@ -56,7 +57,10 @@ func persistOllama(st ollamaStore, bindings []collect.Binding, rows []collect.Re
 	}
 	byAccount := map[key]map[string]store.OllamaWindow{}
 	for _, r := range rows {
-		if r.Provider != "ollama-cloud" || r.Cached || r.Kind != collect.WindowOK || r.UsedPercent == nil || r.ModelRequests == nil {
+		// /api/balance carries no per-model request counters. A nil
+		// ModelRequests map must still persist, or usage deltas and
+		// forecasts would skip every balance-based reading.
+		if r.Provider != "ollama-cloud" || r.Cached || r.Kind != collect.WindowOK || r.UsedPercent == nil {
 			continue
 		}
 		name := ""
@@ -250,11 +254,10 @@ func attachOllama(providers []contract.Provider, hist any, bindings []collect.Bi
 	}
 }
 
-// applyOllamaWindow replaces the reset-based analytics, which never apply to
-// Ollama (no reset is reported), with the resetless estimates: consumption
-// from adjacent nondecreasing readings and a capacity from calibrated runs.
-// No exhaustion time is computed. Ported from src/analytics.mjs
-// applyOllamaCapacity and src/ollama.mjs consumptionPeriods.
+// applyOllamaWindow keeps consumption estimates compatible with legacy
+// resetless history: only adjacent nondecreasing readings contribute.
+// Balance readings preserve their reset in the window, and capacity still
+// requires the legacy per-model counters from calibrated runs.
 func applyOllamaWindow(w *contract.Window, obs []store.OllamaObservation, models []ollamaModel, name string, now int64) {
 	dto, ok := w.Analytics.(map[string]any)
 	if !ok {
@@ -279,7 +282,7 @@ func applyOllamaWindow(w *contract.Window, obs []store.OllamaObservation, models
 	}
 	dto["history"] = sampled
 	dto["status"] = "collecting"
-	dto["reason"] = "리셋 시각이 제공되지 않아 관측 증가분만 추정합니다. 감소·공백은 제외합니다."
+	dto["reason"] = "연속 관측된 증가분만 추정합니다. 감소·공백은 제외합니다."
 	dto["forecastReason"] = dto["reason"]
 	applyOllamaForecast(dto, w, obs, name, hours, now)
 	dto["capacityApiUsd"], dto["remainingApiUsd"], dto["capacityBasis"] = nil, nil, nil

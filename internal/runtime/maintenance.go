@@ -17,7 +17,9 @@ const (
 )
 
 // MaintainIfDue runs retention on the first cycle, then once per elapsed day.
-// Call it after usage ingestion and before analysis. Retention drops price
+// Call it after usage ingestion (including failed ingestion) and before analysis.
+// A failed ingest rolls back its transaction, so retention can reclaim expired
+// rows and allow the next cycle to retry. Retention drops price
 // evidence that nothing links yet, so running it first would delete evidence
 // the ingest just stored for the rows it is about to price. A backward clock
 // or a failed attempt retries on the next cycle. The error is returned for

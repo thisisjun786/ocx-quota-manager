@@ -61,17 +61,19 @@ CREATE TEMP VIEW IF NOT EXISTS usage_valued AS
          ELSE u.usd END noCacheUsd,
     u.rowid rid
   FROM usage u LEFT JOIN cursor_cache_costs c ON c.id=u.id AND u.provider='cursor'
-  LEFT JOIN claude_cache_costs cc ON cc.id=u.id AND u.provider='anthropic'
+  LEFT JOIN claude_cache_costs cc ON cc.id=u.id AND u.provider IN ('anthropic','anthropic-native')
   LEFT JOIN assumption a ON 1=1 LEFT JOIN claude cl ON 1=1;
 `
 
 var requiredTables = []string{
+	"native_usage", "native_cursors", "native_settled",
 	"meta", "usage", "samples", "quota_observations", "usage_timings",
 	"cursor_cache_costs", "claude_cache_costs", "identity_epochs",
 	"price_evidence", "usage_prices", "ollama_observations", "collection_logs",
 }
 
 var requiredIndexes = []string{
+	"native_usage_time",
 	"usage_time", "samples_time", "quota_observations_window",
 	"quota_observations_time", "identity_epochs_open", "collection_logs_time",
 }

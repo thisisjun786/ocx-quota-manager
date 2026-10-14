@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -29,7 +30,15 @@ func main() {
 	}
 	home := env("OPENCODEX_HOME", filepath.Join(os.Getenv("HOME"), ".opencodex"))
 	data := env("QUOTA_DATA_DIR", filepath.Join(first(os.Getenv("XDG_STATE_HOME"), filepath.Join(os.Getenv("HOME"), ".local/state")), "quota-monitor"))
-	hist, err := store.Open(data, store.OpenOptions{})
+	storage, err := historyOptions(os.Getenv("QUOTA_DB_MAX_MIB"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	interval, err := collectInterval(os.Getenv("QUOTA_COLLECT_INTERVAL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	hist, err := store.Open(data, storage)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,10 +46,18 @@ func main() {
 		_ = hist.Close()
 		log.Fatal(err)
 	}
+	if err := configureClaudeRoute(hist, os.Getenv("QUOTA_CLAUDE_OCX_FROM"), os.Getenv("QUOTA_CLAUDE_OCX_UNTIL")); err != nil {
+		_ = hist.Close()
+		log.Fatal(err)
+	}
 	rt := runtime.New(clock.System{}, hist, collect.NewHTTPSTransport())
+	rt.Interval = interval
 	rt.Home = home
 	rt.CodexHome = env("QUOTA_CODEX_HOME", env("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex")))
 	rt.ClaudeHome = env("QUOTA_CLAUDE_HOME", filepath.Join(os.Getenv("HOME"), ".claude"))
+	rt.NativeEnabled = os.Getenv("QUOTA_NATIVE_USAGE") != "off"
+	rt.ClaudeViaOCX = os.Getenv("QUOTA_CLAUDE_VIA_OCX") == "1"
+	rt.GeminiHome = env("QUOTA_GEMINI_HOME", env("GEMINI_CLI_HOME", filepath.Join(os.Getenv("HOME"), ".gemini")))
 	rt.Direct = collect.ParseDirectProviders(os.Getenv("QUOTA_DIRECT_PROVIDERS"))
 	if os.Getenv("QUOTA_PRICE_CATALOG") != "off" {
 		rt.EnableCatalog(data, env("QUOTA_MODEL_CATALOG", filepath.Join(first(os.Getenv("XDG_CACHE_HOME"), filepath.Join(os.Getenv("HOME"), ".cache")), "opencode", "models.json")))
@@ -80,6 +97,32 @@ func main() {
 	if err := rt.Close(shut); err != nil {
 		os.Exit(1)
 	}
+}
+
+// Keep the store's default unless the operator explicitly raises or lowers it.
+func historyOptions(raw string) (store.OpenOptions, error) {
+	if raw == "" {
+		return store.OpenOptions{}, nil
+	}
+	const maxMiB = int64(1<<63-1) / (1 << 20)
+	mib, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || mib < 1 || mib > maxMiB {
+		return store.OpenOptions{}, fmt.Errorf("QUOTA_DB_MAX_MIB must be a positive integer no greater than %d", maxMiB)
+	}
+	return store.OpenOptions{MaxBytes: mib * (1 << 20)}, nil
+}
+
+// collectInterval reads QUOTA_COLLECT_INTERVAL: whole seconds from 10s, the
+// former fixed cadence, to 5m, the direct readers' own minimum cadence.
+func collectInterval(raw string) (time.Duration, error) {
+	if raw == "" {
+		return runtime.DefaultInterval, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second || d > 5*time.Minute || d%time.Second != 0 {
+		return 0, fmt.Errorf("QUOTA_COLLECT_INTERVAL must be whole seconds from 10s to 5m, for example 30s")
+	}
+	return d, nil
 }
 
 func env(k, fallback string) string {

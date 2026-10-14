@@ -78,6 +78,9 @@ func conditionalEvidence(provider, model string, at int64, input float64, row ma
 	instant := time.UnixMilli(at).UTC()
 	weekday := instant.Weekday() != time.Saturday && instant.Weekday() != time.Sunday
 	peak := weekday && ((instant.Hour() >= 1 && instant.Hour() < 4) || (instant.Hour() >= 6 && instant.Hour() < 10))
+	if provider == "ollama-cloud" {
+		peak = weekday && instant.Hour() >= 12 && instant.Hour() < 18
+	}
 	var selected *priceRule
 	known := false
 	for i := range priceRules {

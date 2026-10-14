@@ -598,7 +598,7 @@ export function buildFixture(variantName = 'default') {
       { cacheAssumption: { appliedRate: 0.62, stale: false, updatedAt: now,
         from: now - 30 * 86400000, through: now, invalidLines: 0 }, ...priceFacts('cursor', cursorPrices) }),
     provider('ollama-cloud', 'Ollama Cloud', false, null, [d1], EMPTY, EMPTY,
-      priceFacts('ollama-cloud', ollamaPrices)),
+      { cacheAssumption: { basis: 'user-fixed', appliedRate: 0.9, observedRate: null, stale: false }, ...priceFacts('ollama-cloud', ollamaPrices) }),
   ];
 
   if (!v.legacy) for (const p of providers) {

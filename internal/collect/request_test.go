@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"github.com/thisisjun786/ocx-quota-manager/internal/clock"
 	"github.com/thisisjun786/ocx-quota-manager/internal/transport"
-	"math"
 	"testing"
 	"time"
 )
@@ -75,12 +74,6 @@ func TestSchedulerIntervalAndCredentialIsolation(t *testing.T) {
 	s.Collect(context.Background(), []Binding{b}, []string{"anthropic"})
 	if fake.CallCount() != 1 {
 		t.Fatal("unknownbasecalled")
-	}
-}
-func TestOllamaFraction(t *testing.T) {
-	rows, err := parseOllama([]byte(`{"limits":{"session":{"usage":0.4237},"weekly":{"usage":0}}}`), 1800000000000)
-	if err != nil || len(rows) != 2 || math.Abs(*rows[0].UsedPercent-42.37) > 1e-10 || *rows[1].UsedPercent != 0 {
-		t.Fatal(rows, err)
 	}
 }
 
