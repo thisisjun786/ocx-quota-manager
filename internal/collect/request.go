@@ -91,6 +91,10 @@ func quotaRequest(b Binding, ad Adapter) (transport.Request, bool) {
 		req.Headers["Content-Type"] = "application/json"
 		req.Headers["Connect-Protocol-Version"] = "1"
 		req.Body = []byte("{}")
+	case "antigravity":
+		req.Headers["Content-Type"] = "application/json"
+		req.Headers["User-Agent"] = antigravityUserAgent
+		req.Body = []byte("{}")
 	case "devin":
 		delete(req.Headers, "Authorization")
 		req.Headers["Content-Type"] = "application/json"

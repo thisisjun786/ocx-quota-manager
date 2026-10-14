@@ -24,6 +24,7 @@ type Reading struct {
 	Endpoint         string
 	WindowID         string
 	Label            string
+	Scope            string // usage the window limits, when narrower than the account (an Antigravity model group)
 	RemainingPercent *float64
 	UsedPercent      *float64
 	ResetAt          *int64
@@ -76,6 +77,7 @@ func Adapters() []Adapter {
 		adapter{"devin", "user-status", "server.codeium.com", "/exa.seat_management_pb.SeatManagementService/GetUserStatus", "POST", parseDevin},
 		adapter{"command-code", "credits", "api.commandcode.ai", "/alpha/billing/credits", "GET", parseCommandCode},
 		adapter{"opencode-go", "usage", "opencode.ai", "/zen/go/v1/usage", "GET", parseOpenCode},
+		adapter{"antigravity", "quota-summary", antigravityHost, antigravityQuotaPath, "POST", parseAntigravity},
 	}
 }
 

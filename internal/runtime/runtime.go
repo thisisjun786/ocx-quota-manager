@@ -168,7 +168,7 @@ func (rt *Runtime) cycle(ctx context.Context) {
 	}
 	defer rt.poll.Unlock()
 	now := rt.Clock.Now().UTC()
-	local, err := (collect.Reader{Home: rt.Home, CodexHome: rt.CodexHome, ClaudeHome: rt.ClaudeHome}).LoadLocal(now)
+	local, err := (collect.Reader{Home: rt.Home, CodexHome: rt.CodexHome, ClaudeHome: rt.ClaudeHome, GeminiHome: rt.GeminiHome, Direct: rt.Direct}).LoadLocal(now)
 	if err != nil {
 		rt.markFailureWithNative(ctx, now)
 		return

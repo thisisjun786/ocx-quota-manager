@@ -27,7 +27,7 @@ const (
 var providerNames = map[string]string{
 	"openai": "OpenAI", "anthropic": "Anthropic", "xai": "xAI", "cursor": "Cursor",
 	"ollama-cloud": "Ollama Cloud", "opencode-go": "OpenCode Go", "devin": "Devin",
-	"command-code": "Command Code", "ollama": "Ollama", "kimi": "Kimi",
+	"command-code": "Command Code", "ollama": "Ollama", "kimi": "Kimi", "antigravity": "Antigravity",
 }
 
 var windowOrder = []string{"five-hour", "short", "weekly", "monthly"}
@@ -243,13 +243,19 @@ func (r Reader) LoadLocal(now time.Time) (Local, error) {
 			AccountRef: stringRef(claudeAccountID), Enabled: true, Source: "claudeCredentials",
 		})
 	}
+	// Logins that vendor CLIs keep outside OCX, for the providers opted in.
+	for _, cli := range LocalCLIs {
+		if containsString(r.Direct, cli.Provider) {
+			out = projectLocalCLI(out, cli, load(cli.Source, cli.Path(r)).obj, nowMS)
+		}
+	}
 	// Apply the provider opt-out after every credential source is projected.
 	for i := range out.Bindings {
 		binding := &out.Bindings[i]
 		if out.Files["provider:"+binding.Provider] == FileDisabled {
 			binding.Enabled = false
 		}
-		if binding.Source == "codexAuth" || binding.Source == "claudeCredentials" {
+		if _, cli := localCLI(binding.Source); cli || binding.Source == "codexAuth" || binding.Source == "claudeCredentials" {
 			binding.BaseStatus = "native"
 			continue
 		}
@@ -765,8 +771,13 @@ func project(rows []Reading, now time.Time) []contract.Provider {
 					reset = &s
 				}
 				stale := r.Kind != WindowOK || (r.ObservedAt > 0 && now.UnixMilli()-r.ObservedAt > staleMS) || (r.ResetAt != nil && *r.ResetAt <= now.UnixMilli())
+				var scope *string
+				if r.Scope != "" {
+					s := r.Scope
+					scope = &s
+				}
 				acc.Windows = append(acc.Windows, contract.Window{
-					ID: r.WindowID, Label: r.Label, RemainingPercent: remain, Stale: &stale, ResetAt: reset,
+					ID: r.WindowID, Label: r.Label, RemainingPercent: remain, Stale: &stale, ResetAt: reset, UsageScope: scope,
 				})
 			}
 			if updated == nil {
@@ -816,6 +827,9 @@ func mainIdentityHash(nativeID string) string {
 }
 
 func warningFor(name string) string {
+	if cli, ok := localCLI(name); ok {
+		return cli.Label + " 로그인 정보를 읽지 못했습니다. " + cli.Hint
+	}
 	labels := map[string]string{
 		"ocxConfig": "설정", "ocxAuth": "로그인", "codexQuotaCache": "OpenAI 사용량",
 		"providerQuotaCache": "프로바이더 사용량", "ocxCodexAccounts": "OpenAI 계정",

@@ -15,7 +15,7 @@ Environment=QUOTA_HOST=127.0.0.1
 # Environment=QUOTA_PUBLIC_ORIGIN=https://your-host.your-tailnet.ts.net:10105
 Environment=QUOTA_DATA_DIR=%h/.local/state/quota-monitor
 Environment=QUOTA_PORT=8787
-Environment=QUOTA_DIRECT_PROVIDERS=openai,anthropic,cursor,xai,command-code,opencode-go,devin,kimi
+Environment=QUOTA_DIRECT_PROVIDERS=openai,anthropic,cursor,xai,command-code,opencode-go,devin,kimi,antigravity
 Environment=OPENCODEX_HOME=%h/.opencodex
 Environment=QUOTA_CODEX_HOME=%h/.codex
 # Claude cache writes default to the 5-minute rate. For 1-hour writes set both:
