@@ -89,6 +89,8 @@ Five-hour and weekly limits remain independent, and total subscription credits
 remain a separate scoped window. Stored OAuth or active API-key credentials must
 match the configured authentication mode. Expired credentials are renewed by OCX,
 not by this monitor.
+`antigravity` is the first provider read with a login kept outside OCX; see
+[Tools outside OCX](#tools-outside-ocx-antigravity).
 A name nothing ships is reported on stderr and ignored rather than enabling anything.
 Whichever providers are named, a credential is still only sent where the endpoint table and
 the configured base agree it may go, and turning a provider off in OpenCodex still stops it.
@@ -155,6 +157,47 @@ dividing the stored percentage back does not return what the provider sent. A lo
 reports which kind of failure it was — a refused credential, an unreachable provider, a sound
 answer carrying no window, or a configuration that could not be read — instead of one word for
 all four.
+
+### Tools outside OCX (Antigravity)
+
+Credentials come from two places. OCX's account files are the first; the second is the login a
+vendor's own CLI keeps in the user's home. A local CLI source produces the same `Binding` an OCX
+account does, with `Source` naming the file and the token held only in memory, so from there on
+nothing distinguishes it: the scheduler's five-minute floor, back-off to 30 minutes, the
+30-minute pause after a refused credential and `Retry-After` apply, readings become
+`quota_observations`, and the provider appears in the snapshot with its analytics. A source is read
+only while its provider is named in `QUOTA_DIRECT_PROVIDERS`; the file is never written.
+
+Antigravity is the first such source. With `antigravity` named, the monitor reads
+`$QUOTA_GEMINI_HOME/antigravity-cli/antigravity-oauth-token`, the login agy keeps, and sends the
+request agy's `/usage` sends: `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+with an empty body and an Antigravity user agent (the backend refuses other clients). agy writes
+no quota values locally, so there is nothing to read instead. The account is `antigravity-cli`,
+its identity is the Google account the login's id token names, so the hourly token renewal does not
+split the history, and the provider key is `antigravity`, the same key local Antigravity usage
+carries in `native_usage`.
+
+The answer holds model groups, each with a five-hour and a weekly limit. The group is the
+window's scope and the prefix of its id, so the four limits are four series:
+`gemini-five-hour`, `gemini-weekly`, `3p-five-hour` and `3p-weekly` (`3p` is Claude and GPT),
+stored with `scopeKey` `gemini` or `3p` and published with that `usageScope`. Used percent is
+`100 × (1 − remainingFraction)`. A bucket nothing has used yet reports a reset one window after
+the read, which moves with every read, so its reset is dropped until the window starts. Because
+the windows are scoped, they get consumption and forecast analytics but not the provider-wide
+capacity or account recommendation, the same as Anthropic's per-model limit.
+
+A missing or unreadable login file publishes the account as `reauth`; an expired one is sent and
+answered 401, which shows as `unauthorized` until agy renews it and the changed credential is
+retried. Neither stops collection.
+
+Adding another tool outside OCX is four registrations in `internal/collect`:
+
+1. a `LocalCLI` entry in `LocalCLIs` (`localcli.go`): provider key, `Source`, account id, the
+   login file path and a `Parse` that returns the token and the vendor's stable account reference;
+2. an `adapter` in `Adapters()` with the endpoint, and its parser;
+3. the provider id in `RegisteredDirect` and `SupportKind`, and its display name in `providerNames`;
+4. any request headers the endpoint needs in `quotaRequest`, and, when the source declares a
+   measurement contract, a case in `directObservation` (`internal/runtime`).
 
 ## Retained estimates during quota lookup failures
 

@@ -13,6 +13,9 @@ import (
 func directObservation(row collect.Reading) store.Observation {
 	source, version := row.Provider+"/"+row.Endpoint, "go-percent-1"
 	method, scope, unit := "calculated_percent", row.WindowID, "percent"
+	if row.Scope != "" {
+		scope = row.Scope
+	}
 	semantics := "unknown"
 	switch row.Provider + "/" + row.Endpoint {
 	case "anthropic/oauth-usage":
@@ -25,6 +28,11 @@ func directObservation(row collect.Reading) store.Observation {
 		}
 	case "devin/user-status":
 		version, method, scope = "devin-user-status-1", "reported_percent", "all"
+		if row.ResetAt != nil {
+			semantics = "fixed_reset"
+		}
+	case "antigravity/quota-summary":
+		version, method = "antigravity-quota-summary-1", "reported_percent"
 		if row.ResetAt != nil {
 			semantics = "fixed_reset"
 		}

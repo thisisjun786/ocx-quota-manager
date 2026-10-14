@@ -47,6 +47,10 @@ type Reader struct {
 	Home       string
 	CodexHome  string
 	ClaudeHome string
+	// GeminiHome holds the Antigravity CLI login. Direct names the providers
+	// whose local CLI logins are read (QUOTA_DIRECT_PROVIDERS).
+	GeminiHome string
+	Direct     []string
 	ReadFile   func(string) ([]byte, error)
 	MaxBytes   int
 }
@@ -83,7 +87,7 @@ func ParseDirectProviders(env string) []string {
 }
 
 var RegisteredDirect = []string{
-	"openai", "anthropic", "cursor", "xai", "devin", "command-code", "opencode-go", "kimi",
+	"openai", "anthropic", "cursor", "xai", "devin", "command-code", "opencode-go", "kimi", "antigravity",
 }
 
 func IsRegisteredDirect(id string) bool {
@@ -99,7 +103,7 @@ func IsRegisteredDirect(id string) bool {
 // stays estimate-only (local/model usage, no quota HTTPS), others stay out.
 func SupportKind(id string) string {
 	switch id {
-	case "openai", "anthropic", "cursor", "xai", "devin", "command-code", "opencode-go", "kimi":
+	case "openai", "anthropic", "cursor", "xai", "devin", "command-code", "opencode-go", "kimi", "antigravity":
 		return "direct"
 	case "ollama":
 		return "estimate"
